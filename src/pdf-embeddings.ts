@@ -87,7 +87,7 @@ export async function embedDocuments(
             processed++;
 
             console.debug(
-                `${processed}/${documents.length} documents embedded`
+                `${processed}/${documents.length} documents embedded`, { flush: true }
             );
         } catch (error) {
             failed++;

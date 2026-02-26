@@ -1,4 +1,3 @@
-import { LlamaContext } from "node-llama-cpp";
 import { EmbeddingStore } from "./embedding-store.ts";
 
 /**
@@ -8,7 +7,7 @@ import { EmbeddingStore } from "./embedding-store.ts";
 export async function searchEmbeddings(
     store: EmbeddingStore,
     query: string,
-    embeddingContext: LlamaContext,
+    _embeddingContext?: any,
     limit: number = 10
 ): Promise<string[]> {
     try {
@@ -20,7 +19,7 @@ export async function searchEmbeddings(
             return [];
         }
         
-        console.log(`✓ Retrieved ${results.length} embeddings from ${store.isInMemory ? "memory" : "ChromaDB"}`);
+        console.log(`✓ Retrieved ${results.length} embeddings from ${store.isInMemory ? "memory" : "PostgreSQL"}`);
         return results;
     } catch (error) {
         console.warn(`⚠ Failed to search embeddings: ${(error as Error).message}`);
@@ -33,16 +32,16 @@ export async function searchEmbeddings(
  */
 export async function listStoredEmbeddings(
     store: EmbeddingStore,
-    limit: number = 20
+    _limit: number = 20
 ): Promise<void> {
     try {
-        // For ChromaDB, this would get collection stats
-        console.log(`\n📊 Stored Embeddings (${store.isInMemory ? "In-Memory" : "ChromaDB"})`);
+        // For PostgreSQL, show connection status
+        console.log(`\n📊 Stored Embeddings (${store.isInMemory ? "In-Memory" : "PostgreSQL pgvector"})`);
         console.log("─".repeat(60));
         
         // This is a placeholder - would need actual implementation per store type
-        console.log(`Storage Type: ${store.isInMemory ? "Memory" : "SQLite-backed ChromaDB"}`);
-        console.log(`Database Path: ${store.isInMemory ? "N/A (volatile)" : "data/embeddings.db"}`);
+        console.log(`Storage Type: ${store.isInMemory ? "Memory" : "PostgreSQL with pgvector extension"}`);
+        console.log(`Database: ${process.env["PG_DATABASE"] || "embeddings"} @ ${process.env["PG_HOST"] || "localhost"}:${process.env["PG_PORT"] || 5432}`);
     } catch (error) {
         console.warn(`⚠ Failed to list embeddings: ${(error as Error).message}`);
     }

@@ -1,8 +1,5 @@
-import { LlamaEmbedding, LlamaContext } from "node-llama-cpp";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { LlamaEmbedding } from "node-llama-cpp";
+import { Pool } from "pg";
 
 export interface EmbeddingStore {
     isReady: boolean;
@@ -17,11 +14,9 @@ class InMemoryStore implements EmbeddingStore {
     isReady = true;
     isInMemory = true;
     private embeddingTexts: Map<string, number[]> = new Map();
-    private chunks: string[] = [];
 
-    async addEmbeddings(chunks: string[], embeddings: Map<string, LlamaEmbedding>): Promise<void> {
+    async addEmbeddings(_chunks: string[], embeddings: Map<string, LlamaEmbedding>): Promise<void> {
         console.log("📦 Storing embeddings in memory...");
-        this.chunks = chunks;
         
         for (const [text, embedding] of embeddings) {
             // Store embedding vectors
@@ -32,136 +27,231 @@ class InMemoryStore implements EmbeddingStore {
         console.log(`✓ Stored ${this.embeddingTexts.size} embeddings in memory`);
     }
 
-    async getEmbeddings(query: string, limit: number): Promise<string[]> {
+    async getEmbeddings(_query: string, limit: number): Promise<string[]> {
         return Array.from(this.embeddingTexts.keys()).slice(0, limit);
     }
 
     async clear(): Promise<void> {
         this.embeddingTexts.clear();
-        this.chunks = [];
     }
 }
 
-// ChromaDB store
-class ChromaDBStore implements EmbeddingStore {
-    private client: any = null;
-    private collection: any = null;
+// PgVector store using PostgreSQL with pgvector extension
+class PgVectorStore implements EmbeddingStore {
+    private pool: Pool | null = null;
+    private tableName = "embeddings";
     isReady = false;
     isInMemory = false;
 
     async initialize(): Promise<boolean> {
         try {
-            const { ChromaClient } = await import("chromadb");
-            
-            // Use SQLite persistent storage
-            const dbPath = path.join(__dirname, "..", "data", "embeddings.db");
-            
-            console.log("📦 Initializing ChromaDB with SQLite...");
-            
-            // ChromaDB with SQLite backend
-            this.client = new ChromaClient({
-                path: path.join(__dirname, "..", "data"),
+            // Get PostgreSQL connection details from environment or use defaults
+            const pgHost = process.env["PG_HOST"] || "localhost";
+            const pgPort = parseInt(process.env["PG_PORT"] || "5432");
+            const pgUser = process.env["PG_USER"] || "postgres";
+            const pgPassword = process.env["POSTGRES_PASSWORD"] || "postgres";
+            const pgDatabase = process.env["PG_DATABASE"] || "embeddings";
+
+            console.log(`📦 Connecting to PostgreSQL at ${pgHost}:${pgPort}...`);
+
+            // Create connection pool
+            this.pool = new Pool({
+                host: pgHost,
+                port: pgPort,
+                user: pgUser,
+                password: pgPassword,
+                database: pgDatabase,
             });
 
-            // Get or create collection
-            this.collection = await this.client.getOrCreateCollection({
-                name: "pdf_embeddings",
-                metadata: { "hnsw:space": "cosine" },
-            });
+            // Test connection
+            const client = await this.pool.connect();
+            
+            // Check if pgvector extension is available
+            const extensionResult = await client.query(
+                "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+            );
+            
+            if (!extensionResult.rows[0].exists) {
+                console.log("🔧 Creating pgvector extension...");
+                await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+            }
+
+            // Create embeddings table if it doesn't exist
+            await client.query(`
+                CREATE TABLE IF NOT EXISTS ${this.tableName} (
+                    id SERIAL PRIMARY KEY,
+                    text TEXT NOT NULL UNIQUE,
+                    embedding vector(384),
+                    metadata JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+
+            // Create index for vector similarity search (for faster queries)
+            await client.query(`
+                CREATE INDEX IF NOT EXISTS embeddings_vector_idx 
+                ON ${this.tableName} USING ivfflat (embedding vector_cosine_ops)
+                WITH (lists = 100);
+            `);
+
+            client.release();
 
             this.isReady = true;
-            console.log(`✓ ChromaDB initialized with SQLite at: ${dbPath}`);
+            console.log(`✓ PostgreSQL connection established (pgvector ready)`);
+            console.log(`✓ Table '${this.tableName}' ready for embeddings`);
             return true;
         } catch (error) {
-            console.warn(`⚠ ChromaDB initialization failed: ${(error as Error).message}`);
+            console.warn(`⚠ PostgreSQL initialization failed: ${(error as Error).message}`);
+            console.warn(`  Connection string: ${process.env["PG_HOST"] || "localhost"}:${process.env["PG_PORT"] || 5432}`);
             console.warn("  Falling back to in-memory storage");
+            if (this.pool) {
+                await this.pool.end();
+                this.pool = null;
+            }
             return false;
         }
     }
 
-    async addEmbeddings(chunks: string[], embeddings: Map<string, LlamaEmbedding>): Promise<void> {
-        if (!this.isReady || !this.collection) {
-            throw new Error("ChromaDB not initialized");
+    async addEmbeddings(_chunks: string[], embeddings: Map<string, LlamaEmbedding>): Promise<void> {
+        if (!this.isReady || !this.pool) {
+            throw new Error("PostgreSQL connection not initialized");
         }
 
-        const ids: string[] = [];
-        const documents: string[] = [];
-        const metadatas: Record<string, any>[] = [];
-        const vectors: number[][] = [];
-
-        let index = 0;
-        for (const [text, embedding] of embeddings) {
-            ids.push(`chunk_${index}`);
-            documents.push(text);
-            
-            // Convert embedding to vector array
-            const vector = embedding.vector ? Array.from(embedding.vector) : [];
-            vectors.push(vector);
-            
-            metadatas.push({
-                source: "pdf",
-                timestamp: new Date().toISOString(),
-                length: text.length,
-            });
-            
-            index++;
-        }
-
+        const client = await this.pool.connect();
+        
         try {
-            await this.collection.add({
-                ids,
-                documents,
-                metadatas,
-                embeddings: vectors,
-            });
-            
-            console.log(`✓ Stored ${ids.length} embeddings in ChromaDB`);
-        } catch (error) {
-            console.warn(`⚠ Failed to store embeddings in ChromaDB: ${(error as Error).message}`);
-            throw error;
+            let successCount = 0;
+            let skipCount = 0;
+
+            for (const [text, embedding] of embeddings) {
+                try {
+                    // Convert embedding to vector array
+                    const vector = embedding.vector 
+                        ? `[${Array.from(embedding.vector).join(",")}]`
+                        : null;
+
+                    const metadata = {
+                        source: "pdf",
+                        timestamp: new Date().toISOString(),
+                        length: text.length,
+                    };
+
+                    // Use INSERT ... ON CONFLICT to handle duplicates
+                    await client.query(
+                        `INSERT INTO ${this.tableName} (text, embedding, metadata) 
+                            VALUES ($1, $2::vector, $3::jsonb)
+                            ON CONFLICT (text) DO UPDATE SET 
+                            embedding = EXCLUDED.embedding,
+                            metadata = EXCLUDED.metadata`,
+                        [text, vector, JSON.stringify(metadata)]
+                    );
+
+                    successCount++;
+                } catch (error) {
+                    // Skip duplicate entries
+                    if ((error as any).code === "23505") {
+                        skipCount++;
+                    } else {
+                        console.warn(`⚠ Failed to store embedding: ${(error as Error).message}`);
+                    }
+                }
+            }
+
+            console.log(`✓ Stored ${successCount} new embeddings in PostgreSQL (${skipCount} duplicates skipped)`);
+        } finally {
+            client.release();
         }
     }
 
-    async getEmbeddings(query: string, limit: number): Promise<string[]> {
-        if (!this.isReady || !this.collection) {
-            throw new Error("ChromaDB not initialized");
+    async getEmbeddings(_queryText: string, limit: number): Promise<string[]> {
+        if (!this.isReady || !this.pool) {
+            throw new Error("PostgreSQL connection not initialized");
         }
 
         try {
-            const results = await this.collection.query({
-                queryTexts: [query],
-                nResults: limit,
-            });
+            const client = await this.pool.connect();
+            
+            try {
+                // Query for similar embeddings using cosine distance
+                // Note: We use text similarity as a placeholder since we don't have query embedding here
+                // The actual semantic ranking happens in pdf-embeddings.ts using findSimilarDocuments
+                const result = await client.query(
+                    `SELECT text FROM ${this.tableName} 
+                     ORDER BY created_at DESC 
+                     LIMIT $1`,
+                    [limit]
+                );
 
-            return results.documents[0] || [];
+                return result.rows.map(row => row.text);
+            } finally {
+                client.release();
+            }
         } catch (error) {
             console.warn(`⚠ Query failed: ${(error as Error).message}`);
             throw error;
         }
     }
 
-    async clear(): Promise<void> {
-        if (this.isReady && this.collection) {
+    async queryByEmbedding(embedding: number[], limit: number): Promise<Array<{text: string, similarity: number}>> {
+        if (!this.isReady || !this.pool) {
+            throw new Error("PostgreSQL connection not initialized");
+        }
+
+        try {
+            const client = await this.pool.connect();
+            
             try {
-                // Get all items and delete them
-                const allItems = await this.collection.get();
-                if (allItems.ids?.length > 0) {
-                    await this.collection.delete({ ids: allItems.ids });
-                    console.log("✓ ChromaDB collection cleared");
+                const vectorString = `[${embedding.join(",")}]`;
+                
+                // Query using cosine similarity (<-> operator)
+                const result = await client.query(
+                    `SELECT text, 1 - (embedding <-> $1::vector) as similarity 
+                     FROM ${this.tableName}
+                     ORDER BY similarity DESC 
+                     LIMIT $2`,
+                    [vectorString, limit]
+                );
+
+                return result.rows;
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            console.warn(`⚠ Vector query failed: ${(error as Error).message}`);
+            throw error;
+        }
+    }
+
+    async clear(): Promise<void> {
+        if (this.isReady && this.pool) {
+            try {
+                const client = await this.pool.connect();
+                try {
+                    await client.query(`DELETE FROM ${this.tableName}`);
+                    console.log("✓ PostgreSQL embeddings table cleared");
+                } finally {
+                    client.release();
                 }
             } catch (error) {
-                console.warn(`⚠ Failed to clear collection: ${(error as Error).message}`);
+                console.warn(`⚠ Failed to clear embeddings: ${(error as Error).message}`);
             }
+        }
+    }
+
+    async close(): Promise<void> {
+        if (this.pool) {
+            await this.pool.end();
+            this.pool = null;
         }
     }
 }
 
 export async function createEmbeddingStore(): Promise<EmbeddingStore> {
-    const chromaStore = new ChromaDBStore();
-    const initialized = await chromaStore.initialize();
+    const pgvectorStore = new PgVectorStore();
+    const initialized = await pgvectorStore.initialize();
 
     if (initialized) {
-        return chromaStore;
+        return pgvectorStore;
     } else {
         // Fallback to in-memory store
         return new InMemoryStore();
@@ -177,7 +267,7 @@ export async function storeEmbeddingsWithFallback(
         await store.addEmbeddings(chunks, embeddings);
     } catch (error) {
         if (!store.isInMemory) {
-            console.warn("⚠ Failed to store in ChromaDB, using in-memory fallback");
+            console.warn("⚠ Failed to store in PostgreSQL, using in-memory fallback");
             const memoryStore = new InMemoryStore();
             await memoryStore.addEmbeddings(chunks, embeddings);
         } else {
@@ -194,7 +284,10 @@ export async function queryEmbeddingsWithFallback(
     try {
         return await store.getEmbeddings(query, limit);
     } catch (error) {
-        console.warn(`⚠ Query failed on ${store.isInMemory ? "in-memory" : "ChromaDB"} store`);
+        console.warn(`⚠ Query failed on ${store.isInMemory ? "in-memory" : "PostgreSQL"} store`);
         throw error;
     }
 }
+
+// Export PgVectorStore for advanced use cases
+export { PgVectorStore };

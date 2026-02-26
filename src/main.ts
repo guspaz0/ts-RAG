@@ -4,27 +4,30 @@ import { existsSync } from "node:fs";
 import { getLlama } from "node-llama-cpp";
 import { parsePDF, embedDocuments, findSimilarDocuments } from "./pdf-embeddings.ts";
 import { createQueryEngine, queryWithContext, formatQueryResult } from "./query-engine.ts";
-import { createEmbeddingStore, EmbeddingStore } from "./embedding-store.ts";
+import { createEmbeddingStore, type EmbeddingStore } from "./embedding-store.ts";
+
+process.loadEnvFile(path.join(process.cwd(), '.env'))
 
 const __dirname = path.dirname(
     fileURLToPath(import.meta.url)
 );
 
+// Force using Metal backend for Mac Intel + AMD Gpu inference
 const llama = await getLlama({ gpu: 'metal' });
 
-// Initialize embedding store (ChromaDB with fallback to in-memory)
+// Initialize embedding store (PostgreSQL pgvector with fallback to in-memory)
 const embeddingStore: EmbeddingStore = await createEmbeddingStore();
-console.log(`✓ Embedding store initialized (${embeddingStore.isInMemory ? "In-Memory" : "ChromaDB + SQLite"})`);
+console.log(`✓ Embedding store initialized (${embeddingStore.isInMemory ? "In-Memory" : "PostgreSQL pgvector"})`);
 
 // Embedding model
 const embeddingModel = await llama.loadModel({
-    modelPath: path.join(__dirname, "..", "models", "bge-small-en-v1.5-Q8_0.gguf"),
+    modelPath: path.join(__dirname, "..", "models", process.env['EMBEDDING_MODEL'] as string),
 });
 const embeddingContext = await embeddingModel.createEmbeddingContext();
 
 // Language model for query processing (optional)
 let queryContext: any = null;
-const llmModelPath = path.join(__dirname, "..", "models", "neural-chat-7b-v3-3.i1-Q4_K_M.gguf");
+const llmModelPath = path.join(__dirname, "..", "models",  process.env['QUERY_MODEL'] as string);
 const hasLLMModel = existsSync(llmModelPath);
 
 if (hasLLMModel) {
@@ -60,10 +63,10 @@ async function main() {
         if (documentEmbeddings.size === 0) {
             console.error("Failed to create any embeddings from the PDF");
 
-        // Store embeddings in ChromaDB or memory
+        // Store embeddings in PostgreSQL or memory
         try {
             await embeddingStore.addEmbeddings(pdfChunks, documentEmbeddings);
-            console.log(`✓ Embeddings stored in ${embeddingStore.isInMemory ? "memory" : "ChromaDB"}`);
+            console.log(`✓ Embeddings stored in ${embeddingStore.isInMemory ? "memory" : "PostgreSQL pgvector"}`);
         } catch (error) {
             console.warn(`⚠ Failed to store embeddings: ${(error as Error).message}`);
         }
@@ -117,10 +120,7 @@ async function main() {
             console.log(formatQueryResult(result));
         } else {
             console.log("\n⚠ Language model not available.");
-            console.log("To enable query processing with a language model, download a model like:");
-            console.log("  - neural-chat-7b-v3-3-Q4_K_M.gguf");
-            console.log("  - mistral-7b-instruct-v0.2.Q4_K_M.gguf");
-            console.log("And place it in the models/ directory.");
+            console.log("To enable query processing with a language model, download a model");
         }
     } catch (error) {
         console.error("Error:", error);

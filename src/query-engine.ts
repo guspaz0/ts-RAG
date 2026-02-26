@@ -55,7 +55,7 @@ Answer:`;
         try {
             // Use the sequence method to generate text
             const response = await context.getCompletionStream(prompt, {
-                maxTokens: 1024,
+                maxTokens: 2048,
                 temperature: 0.7,
                 topP: 0.9,
             });
