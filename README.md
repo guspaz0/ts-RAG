@@ -81,7 +81,6 @@ npm run dev
 ### Build
 
 Compile TypeScript to JavaScript:
-```bash & Storage
 1. Parse PDF and extract text content
 2. Split text into manageable chunks (~1000 characters)
 3. Generate embeddings for each chunk using the embedding model
@@ -98,28 +97,6 @@ Compile TypeScript to JavaScript:
 1. Send the user's question + relevant context to the language model
 2. Model generates an answer based on the provided context
 3. Return formatted response to user
-
-## Storage Architecture
-
-```
-┌─────────────────────────────────────────┐
-│    PDF Documents → Embeddings           │
-└────────────────┬────────────────────────┘
-                 │
-         ┌───────▼────────┐
-         │  Try ChromaDB   │   # Entry point, CLI handling
-│   ├── pdf-embeddings.ts       # PDF parsing and embedding functions
-│   ├── query-engine.ts         # RAG and question answering
-│   ├── embedding-store.ts      # ChromaDB + Memory storage management
-│   └── embedding-search.ts     # Search and retrieval utilities
-├── data/
-│   └── embeddings.db           # SQLite database (persistent embeddings)
-├── models/
-│   ├── bge-small-en-v1.5-Q8_0.gguf         # Embedding model
-│   └── neural-chat-7b-v3-3-Q4_K_M.gguf    # Language model (optional)
-├── package.json
-├── tsconfig.json
-├── Embedding Storage (`embedding-store.ts`)
 
 **`createEmbeddingStore(): Promise<EmbeddingStore>`**
 - Creates embedding store (ChromaDB if available, Memory fallback)
@@ -138,40 +115,13 @@ Compile TypeScript to JavaScript:
 - Returns storage type and location information
 
 **`clearAllEmbeddings(store)`**
-- Clears all stored embeddings installation script
-└── README.md──────────────────┘
-                 │
-      ┌──────────┴──────────┐
-      │ On Failure/Error    │
-      └──────┬───────────────┘
-             │
-    ┌────────▼──────────┐
-    │ In-Memory Store   │
-    │ [VOLATILE - Session │
-    │  only]             │
-    └────────────────────┘
-```using cosine similarity
+- Clears all stored embeddings installation script using cosine similarity
 3. Retrieve top-K most relevant chunks as context
 
 ### Phase 3: Answer Generation
 1. Send the user's question + relevant context to the language model
 2. Model generates an answer based on the provided context
 3. Return formatted response to user
-
-## Project Structure
-
-```
-.
-├── src/
-│   ├── main.ts              # Entry point, CLI handling
-│   ├── pdf-embeddings.ts    # PDF parsing and embedding functions
-│   └── query-engine.ts      # RAG and question answering engine
-├── models/
-│   ├── bge-small-en-v1.5-Q8_0.gguf    # Embedding model
-│   └── neural-chat-7b-v3-3-Q4_K_M.gguf # Language model (optional)
-├── package.json
-└── tsconfig.json
-```
 
 ## API Functions
 
