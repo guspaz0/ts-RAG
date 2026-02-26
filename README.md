@@ -1,6 +1,6 @@
 # JS Embeddings - RAG System
 
-A TypeScript project for building a Retrieval Augmented Generation (RAG) system that parses PDF files, creates embeddings, stores them persistently with ChromaDB/SQLite, and answers questions using an AI model powered by Llama.cpp.
+A TypeScript project for building a Retrieval Augmented Generation (RAG) system that parses PDF files, creates embeddings, stores them persistently with pgvector, and answers questions using an AI model powered by Llama.cpp.
 
 ## Features
 
