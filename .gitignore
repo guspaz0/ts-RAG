@@ -1,0 +1,6 @@
+*.gguf
+.env
+node_modules
+data/
+dist/
+*.log

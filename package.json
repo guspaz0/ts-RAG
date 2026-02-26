@@ -1,0 +1,30 @@
+{
+  "name": "js-embeddings",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/main.ts",
+    "dev": "ts-node --watch src/main.ts",
+    "check": "node check-config.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/pg": "^8.16.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@langchain/community": "^1.1.19",
+    "@langchain/core": "^1.1.28",
+    "node-llama-cpp": "^3.16.2",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.19.0"
+  }
+}
