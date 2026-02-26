@@ -6,8 +6,8 @@ A TypeScript project for building a Retrieval Augmented Generation (RAG) system 
 
 - **PDF Parsing**: Extract text content from PDF files using LangChain's PDFLoader
 - **Embeddings Creation**: Generate embeddings from document text using embedding models (e.g., BGE-small)
-- **Persistent Storage**: Store embeddings in ChromaDB with SQLite backend for persistence
-- **Graceful Fallback**: If ChromaDB fails, embeddings are stored in memory automatically
+- **Persistent Storage**: Store embeddings in pgvector for persistence
+- **Graceful Fallback**: If pgvector fails, embeddings are stored in memory automatically
 - **Similarity Search**: Find relevant document chunks based on semantic similarity to queries
 - **RAG (Retrieval Augmented Generation)**: Answer questions using a language model with retrieved context
 - **Flexible Model Support**: Use different Llama.cpp models for embeddings and generation
@@ -21,33 +21,10 @@ A TypeScript project for building a Retrieval Augmented Generation (RAG) system 
 
 ## Installation
 
-1. Install dependencies (including ChromaDB):
-```bash
-npm install
-# or use the install script
-bash install.sh
-```
+1. Download required models (as before). GGUF format required
 
-This creates:
-- `node_modules/` - All npm packages including ChromaDB
-- `data/` - Directory for persistent SQLite database (chromadb.db)
-
-2. Download required models (as before)
-
-**Embedding Model** (Go to [Hugging Face](https://huggingface.co/) and download):
-```bash
-# BGE-small embedding model
-# Place at: models/bge-small-en-v1.5-Q8_0.gguf
-```
-
+**Embedding Model** (Go to [Hugging Face](https://huggingface.co/) and download)
 **Language Model** (Optional, for question answering):
-```bash
-# Examples:
-# - neural-chat-7b-v3-3-Q4_K_M.gguf (recommended for most cases)
-# - mistral-7b-instruct-v0.2.Q4_K_M.gguf
-# - zephyr-7b-beta.Q4_K_M.gguf
-# Place at: models/neural-chat-7b-v3-3-Q4_K_M.gguf
-```
 
 ## Usage
 
@@ -84,13 +61,13 @@ Compile TypeScript to JavaScript:
 1. Parse PDF and extract text content
 2. Split text into manageable chunks (~1000 characters)
 3. Generate embeddings for each chunk using the embedding model
-4. **Store embeddings persistently in ChromaDB (SQLite backend)**
-   - If ChromaDB fails, automatic fallback to in-memory storage
-   - SQLite database saved in `data/embeddings.db` for persistence across sessions
+4. **Store embeddings persistently in pgvector (postgres backend)**
+   - If Pgvector fails, automatic fallback to in-memory storage
+
 
 ### Phase 2: Query Processing
 1. Generate embedding for the user's question
-2. Search ChromaDB/memory for semantically similar chunks
+2. Search pgvector/memory for semantically similar chunks
 3. Retrieve top-K most relevant chunks as context
 
 ### Phase 3: Answer Generation
@@ -99,11 +76,11 @@ Compile TypeScript to JavaScript:
 3. Return formatted response to user
 
 **`createEmbeddingStore(): Promise<EmbeddingStore>`**
-- Creates embedding store (ChromaDB if available, Memory fallback)
+- Creates embedding store (pgvector if available, Memory fallback)
 - Checks database connectivity automatically
 
 **`storeEmbeddingsWithFallback(store, chunks, embeddings)`**
-- Stores embeddings in ChromaDB or memory with automatic fallback
+- Stores embeddings in pgvector or memory with automatic fallback
 
 ### Embedding Search (`embedding-search.ts`)
 
