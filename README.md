@@ -168,7 +168,7 @@ const llmModelPath = "path/to/language/model.gguf";
 
 ## Performance Tips
 
-1. **Use GPU Acceleration**: Metal on macOS, CUDA on NVIDIA
+1. **Use GPU Acceleration**: Metal on macOS, CUDA on NVIDIA, Rocm on AMD or Vulkan for vendor agnostic, check compatibility with node-llama-cpp
 2. **Adjust Context Size**: Larger chunks = better context but slower processing
 3. **Limit Retrieved Results**: Use fewer chunks as context for faster generation
 4. **Model Selection**: Smaller models (7B) for speed, larger (13B+) for quality
