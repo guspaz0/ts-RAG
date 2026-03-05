@@ -178,6 +178,39 @@ npm run dev
     └──────────┘      └──────────┘
 ```
 
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│   PDF Document Processing       │
+│   (pdf-embeddings.ts)           │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   Embedding Generation          │
+│   (node-llama-cpp)              │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   Embedding Storage Decision    │
+│   (embedding-store.ts)          │
+└────┬─────────────────────┬──────┘
+     │                     │
+  (Try)               (Fallback)
+     │                     │
+     ▼                     ▼
+┌──────────────┐    ┌─────────────┐
+│ PostgreSQL   │    │  In-Memory  │
+│ + pgvector   │    │   Storage   │
+│              │    │             │
+│ • IVFFLAT    │    │ • Fast      │
+│ • Persistent │    │ • Non-persist
+│ • Scalable   │    │             │
+└──────────────┘    └─────────────┘
+```
+
 ## Project Structure
 
 ```

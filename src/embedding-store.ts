@@ -6,6 +6,7 @@ export interface EmbeddingStore {
     isInMemory: boolean;
     addEmbeddings(chunks: string[], embeddings: Map<string, LlamaEmbedding>): Promise<void>;
     getEmbeddings(query: string, limit: number): Promise<string[]>;
+    getAllEmbeddings(): Promise<string[]>;
     clear(): Promise<void>;
 }
 
@@ -170,16 +171,41 @@ class PgVectorStore implements EmbeddingStore {
 
         try {
             const client = await this.pool.connect();
-            
+
             try {
                 // Query for similar embeddings using cosine distance
                 // Note: We use text similarity as a placeholder since we don't have query embedding here
                 // The actual semantic ranking happens in pdf-embeddings.ts using findSimilarDocuments
                 const result = await client.query(
-                    `SELECT text FROM ${this.tableName} 
-                     ORDER BY created_at DESC 
+                    `SELECT text FROM ${this.tableName}
+                     ORDER BY created_at DESC
                      LIMIT $1`,
                     [limit]
+                );
+
+                return result.rows.map(row => row.text);
+            } finally {
+                client.release();
+            }
+        } catch (error) {
+            console.warn(`⚠ Query failed: ${(error as Error).message}`);
+            throw error;
+        }
+    }
+
+    async getAllEmbeddings(): Promise<string[]> {
+        if (!this.isReady || !this.pool) {
+            throw new Error("PostgreSQL connection not initialized");
+        }
+
+        try {
+            const client = await this.pool.connect();
+
+            try {
+                // Get all embeddings ordered by creation date
+                const result = await client.query(
+                    `SELECT text FROM ${this.tableName}
+                     ORDER BY created_at ASC`
                 );
 
                 return result.rows.map(row => row.text);
@@ -289,6 +315,18 @@ export async function queryEmbeddingsWithFallback(
         return await store.getEmbeddings(query, limit);
     } catch (error) {
         console.warn(`⚠ Query failed on ${store.isInMemory ? "in-memory" : "PostgreSQL"} store`);
+        throw error;
+    }
+}
+
+// Helper function to get all embeddings
+export async function getAllEmbeddingsWithFallback(
+    store: EmbeddingStore
+): Promise<string[]> {
+    try {
+        return await store.getAllEmbeddings();
+    } catch (error) {
+        console.warn(`⚠ Failed to get all embeddings from ${store.isInMemory ? "in-memory" : "PostgreSQL"} store`);
         throw error;
     }
 }

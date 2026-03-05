@@ -45,9 +45,31 @@ if (hasLLMModel) {
 
 async function main() {
     try {
-        // Get PDF path from command line arguments
-        const pdfPath = process.argv[2];
-        const query = process.argv[3] || "What is the content about?";
+        // Parse command line arguments
+        let pdfPath: string | null = null;
+        let query: string | null = null;
+
+        // Process command line arguments to find --pdf and --query options
+        for (let i = 2; i < process.argv.length; i++) {
+            if (process.argv[i] === '--pdf') {
+                pdfPath = process.argv[i + 1];
+                i++; // Skip next argument as it's the value
+            } else if (process.argv[i] === '--query') {
+                query = process.argv[i + 1];
+                i++; // Skip next argument as it's the value
+            }
+        }
+
+        // If no --pdf or --query provided, check for positional arguments
+        if (!pdfPath && !query) {
+            pdfPath = process.argv[2];
+            query = process.argv[3];
+        }
+
+        // If no query provided, set default
+        if (!query) {
+            query = "What is the content about?";
+        }
 
         console.log(`Query: "${query}"`);
 
@@ -76,17 +98,6 @@ async function main() {
                         }
                         console.log(`✓ Found ${memoryDocuments.length} relevant chunks in in-memory store`);
                         // Show relevant context
-                        const numChunksToShow = Math.min(5, memoryDocuments.length);
-                        console.log(`\n📚 Showing top ${numChunksToShow} of ${memoryDocuments.length} relevant chunks:`);
-                        console.log("────────────────────────────────────────────────");
-                        memoryDocuments.slice(0, numChunksToShow).forEach((doc, index) => {
-                            console.log(`\n[Chunk ${index + 1}/${memoryDocuments.length}]`);
-                            console.log(doc.substring(0, 300) + (doc.length > 300 ? "..." : ""));
-                        });
-                        if (memoryDocuments.length > numChunksToShow) {
-                            console.log(`\n[... and ${memoryDocuments.length - numChunksToShow} more chunks will be passed to the model ...]`);
-                        }
-                        console.log("\n────────────────────────────────────────────────");
                     } catch (memoryError) {
                         console.error("Error querying in-memory store:", memoryError);
                         process.exit(1);
@@ -96,26 +107,26 @@ async function main() {
 
                 console.log(`✓ Found ${similarDocuments.length} relevant chunks in pgvector`);
 
-                // Show relevant context
-                const numChunksToShow = Math.min(5, similarDocuments.length);
-                console.log(`\n📚 Showing top ${numChunksToShow} of ${similarDocuments.length} relevant chunks:`);
-                console.log("────────────────────────────────────────────────");
-                similarDocuments.slice(0, numChunksToShow).forEach((doc, index) => {
-                    console.log(`\n[Chunk ${index + 1}/${similarDocuments.length}]`);
-                    console.log(doc.text.substring(0, 300) + (doc.text.length > 300 ? "..." : ""));
-                });
-                if (similarDocuments.length > numChunksToShow) {
-                    console.log(`\n[... and ${similarDocuments.length - numChunksToShow} more chunks will be passed to the model ...]`);
-                }
-                console.log("\n────────────────────────────────────────────────");
-
                 // Process with language model if available
                 if (queryContext) {
                     console.log("\n🤖 Generating answer with language model...");
+                    // Get all embeddings from the database to provide full context
+                    let allDocuments: string[] = [];
+                    try {
+                        // Try to get all documents from pgvector first
+                        allDocuments = await embeddingStore.getAllEmbeddings();
+                        console.log(`✓ Retrieved ${allDocuments.length} documents from database for full context`);
+                    } catch (error) {
+                        console.warn(`⚠ Failed to retrieve all documents from database: ${(error as Error).message}`);
+                        console.warn("  Falling back to using only similar documents...");
+                        // Fallback to using similar documents if database access fails
+                        allDocuments = similarDocuments.map(d => d.text);
+                    }
+
                     const result = await queryWithContext(
                         queryContext,
                         query,
-                        similarDocuments.map(d => d.text)
+                        allDocuments
                     );
 
                     console.log(formatQueryResult(result));
@@ -134,17 +145,6 @@ async function main() {
                     }
                     console.log(`✓ Found ${similarDocuments.length} relevant chunks in in-memory store`);
                     // Show relevant context
-                    const numChunksToShow = Math.min(5, similarDocuments.length);
-                    console.log(`\n📚 Showing top ${numChunksToShow} of ${similarDocuments.length} relevant chunks:`);
-                    console.log("────────────────────────────────────────────────");
-                    similarDocuments.slice(0, numChunksToShow).forEach((doc, index) => {
-                        console.log(`\n[Chunk ${index + 1}/${similarDocuments.length}]`);
-                        console.log(doc.substring(0, 300) + (doc.length > 300 ? "..." : ""));
-                    });
-                    if (similarDocuments.length > numChunksToShow) {
-                        console.log(`\n[... and ${similarDocuments.length - numChunksToShow} more chunks will be passed to the model ...]`);
-                    }
-                    console.log("\n────────────────────────────────────────────────");
                 } catch (fallbackError) {
                     console.error("Error querying in-memory store:", fallbackError);
                     process.exit(1);
@@ -190,48 +190,41 @@ async function main() {
             console.warn(`⚠ Failed to store embeddings: ${(error as Error).message}`);
         }
 
-        // Find similar documents for the query
-        const queryEmbedding = await embeddingContext.getEmbeddingFor(query);
-        const similarDocuments = findSimilarDocuments(
-            queryEmbedding,
-            documentEmbeddings
-        );
-
-        if (similarDocuments.length === 0) {
-            console.error("No similar documents found");
-            process.exit(1);
-        }
-
-        console.log(`✓ Found ${similarDocuments.length} relevant chunks`);
-
-        // Show relevant context
-        const numChunksToShow = Math.min(5, similarDocuments.length);
-        console.log(`\n📚 Showing top ${numChunksToShow} of ${similarDocuments.length} relevant chunks:`);
-        console.log("────────────────────────────────────────────────");
-        similarDocuments.slice(0, numChunksToShow).forEach((doc, index) => {
-            console.log(`\n[Chunk ${index + 1}/${similarDocuments.length}]`);
-            console.log(doc.substring(0, 300) + (doc.length > 300 ? "..." : ""));
-        });
-        if (similarDocuments.length > numChunksToShow) {
-            console.log(`\n[... and ${similarDocuments.length - numChunksToShow} more chunks will be passed to the model ...]`);
-        }
-        console.log("\n────────────────────────────────────────────────");
-
-        // Process with language model if available
-        if (queryContext) {
-            console.log("\n🤖 Generating answer with language model...");
-            // Pass ALL similar documents to the LLM (not limited to 3)
-            const result = await queryWithContext(
-                queryContext,
-                query,
-                similarDocuments
-                // No maxResults specified - will use all documents
+        // Process query if provided
+        if (query && query !== "What is the content about?") {
+            // Find similar documents for the query
+            const queryEmbedding = await embeddingContext.getEmbeddingFor(query);
+            const similarDocuments = findSimilarDocuments(
+                queryEmbedding,
+                documentEmbeddings
             );
 
-            console.log(formatQueryResult(result));
+            if (similarDocuments.length === 0) {
+                console.error("No similar documents found");
+                process.exit(1);
+            }
+
+            console.log(`✓ Found ${similarDocuments.length} relevant chunks`);
+
+            // Process with language model if available
+            if (queryContext) {
+                console.log("\n🤖 Generating answer with language model...");
+                // Pass ALL similar documents to the LLM (not limited to 3)
+                const result = await queryWithContext(
+                    queryContext,
+                    query,
+                    similarDocuments
+                    // No maxResults specified - will use all documents
+                );
+
+                console.log(formatQueryResult(result));
+            } else {
+                console.log("\n⚠ Language model not available.");
+                console.log("To enable query processing with a language model, download a model");
+            }
         } else {
-            console.log("\n⚠ Language model not available.");
-            console.log("To enable query processing with a language model, download a model");
+            // If no query was provided, just show the PDF content
+            console.log(`\n📄 PDF processed successfully. Embeddings stored. No query was provided.`);
         }
     } catch (error) {
         console.error("Error:", error);
