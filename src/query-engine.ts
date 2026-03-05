@@ -122,7 +122,7 @@ export function formatQueryResult(result: QueryResult): string {
 📝 Question: "${result.query}"
 
 🔍 Context Used:
-   ${result.context.split("\n---\n").length} chunks • ${contextSize} chars • ${contextLines} lines
+    ${result.context.split("\n---\n").length} chunks • ${contextSize} chars • ${contextLines} lines
 ────────────────────────────────────────────────────────────────
 ${result.context.substring(0, 1500)}${result.context.length > 1500 ? "\n\n[... full context provided to model ...]" : ""}
 ────────────────────────────────────────────────────────────────

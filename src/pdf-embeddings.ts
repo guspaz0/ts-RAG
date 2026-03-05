@@ -1,4 +1,4 @@
-import { LlamaEmbedding, LlamaContext } from "node-llama-cpp";
+import { LlamaEmbedding, LlamaEmbeddingContext } from "node-llama-cpp";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf"
 
 // Maximum context size for Gemma-300M model (in tokens, roughly 1 token ≈ 4 chars)
@@ -70,7 +70,7 @@ export async function parsePDF(pdfPath: string): Promise<string[]> {
 }
 
 export async function embedDocuments(
-    context: LlamaContext,
+    context: LlamaEmbeddingContext,
     documents: readonly string[]
 ) {
     const embeddings = new Map<string, LlamaEmbedding>();
@@ -114,4 +114,3 @@ export function findSimilarDocuments(
     return Array.from(similarities.keys())
         .sort((a, b) => similarities.get(b)! - similarities.get(a)!);
 }
-

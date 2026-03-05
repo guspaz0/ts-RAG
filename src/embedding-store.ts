@@ -199,26 +199,30 @@ class PgVectorStore implements EmbeddingStore {
 
         try {
             const client = await this.pool.connect();
-            
+
             try {
                 const vectorString = `[${embedding.join(",")}]`;
-                
+
                 // Query using cosine similarity (<-> operator)
                 const result = await client.query(
-                    `SELECT text, 1 - (embedding <-> $1::vector) as similarity 
+                    `SELECT text, 1 - (embedding <-> $1::vector) as similarity
                      FROM ${this.tableName}
-                     ORDER BY similarity DESC 
+                     ORDER BY similarity DESC
                      LIMIT $2`,
                     [vectorString, limit]
                 );
 
-                return result.rows;
+                return result.rows.map(row => ({
+                    text: row.text,
+                    similarity: row.similarity
+                }));
             } finally {
                 client.release();
             }
         } catch (error) {
             console.warn(`⚠ Vector query failed: ${(error as Error).message}`);
-            throw error;
+            // In case of error, return empty array so fallback can happen
+            return [];
         }
     }
 

@@ -124,6 +124,14 @@ Run the application with a PDF file and query:
 npm start /path/to/your/file.pdf "Your question here"
 ```
 
+### Query Existing Embeddings
+
+You can also query existing embeddings without providing a PDF file:
+```bash
+npm start
+```
+This will search through existing embeddings in PostgreSQL/pgvector and return relevant chunks.
+
 ### Examples
 
 ```bash
@@ -135,6 +143,9 @@ npm start documents/guide.pdf
 
 # With relative path
 npm start ./my-document.pdf "Summarize the introduction"
+
+# Query existing embeddings (no PDF needed)
+npm start
 ```
 
 ### Development Mode
@@ -161,6 +172,7 @@ npm run dev
 1. Generate embedding for the user's question
 2. Search PostgreSQL pgvector for semantically similar chunks using vector similarity (cosine distance)
 3. Retrieve top-K most relevant chunks as context
+4. If no embeddings found in PostgreSQL, fallback to in-memory storage
 
 ### Phase 3: Answer Generation
 1. Send the user's question + relevant context to the language model
@@ -254,6 +266,7 @@ js-embeddings/
 **`PgVectorStore.queryByEmbedding(embedding, limit)`** (Advanced)
 - Query PostgreSQL directly using vector similarity
 - Returns results with cosine similarity scores
+- Gracefully handles query failures by returning empty array for fallback
 
 ### Embedding Search (`embedding-search.ts`)
 
@@ -296,7 +309,7 @@ js-embeddings/
 - Parses a PDF file and splits content into chunks
 - Returns array of text chunks
 
-**`embedDocuments(context: LlamaContext, documents: readonly string[]): Promise<Map<string, LlamaEmbedding>>`**
+**`embedDocuments(context: LlamaEmbeddingContext, documents: readonly string[]): Promise<Map<string, LlamaEmbedding>>`**
 - Creates embeddings for document chunks
 - Handles errors gracefully
 
@@ -353,6 +366,10 @@ const llmModelPath = "path/to/language/model.gguf";
 - The system will fall back to showing relevant chunks
 - Download a language model for full RAG functionality
 - Ensure model is in GGUF format
+
+### Query fails with no results
+- If querying existing embeddings and getting no results, verify that embeddings exist in the database
+- The system will automatically fall back to in-memory storage if PostgreSQL is unavailable
 
 ## Performance Tips
 
