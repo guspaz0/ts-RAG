@@ -1,10 +1,9 @@
 import { LlamaEmbedding, LlamaEmbeddingContext } from "node-llama-cpp";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf"
 
-// Maximum context size for Gemma-300M model (in tokens, roughly 1 token ≈ 4 chars)
-const MAX_CONTEXT_CHARS = 1000;
+const MAX_CONTEXT_CHARS = 2000;
 
-function splitIntoChunks(text: string, maxChunkSize: number = MAX_CONTEXT_CHARS): string[] {
+export function splitIntoChunks(text: string, maxChunkSize: number = MAX_CONTEXT_CHARS): string[] {
     if (!text || text.length === 0) {
         return [];
     }

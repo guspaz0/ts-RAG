@@ -1,15 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
+    "module": "commonjs",
+    //"moduleResolution": "nodenext",
     "types": ["node"],
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
+    //   "resolveJsonModule": true,
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -24,19 +24,14 @@
     "noUnusedParameters": true,
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
-    "noEmit": true
+    "noEmit": true,
+    "outDir": "./dist"
   },
   "ts-node": {
     "esm": true,
     "experimentalEsm": true
   },
-  "include": [
-    "src/**/*"
-  ],
-  "exclude": [
-    "node_modules"
-  ],
-  "outDir": [
-    "./dist"
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"],
+  "outDir": ["./dist"]
 }
