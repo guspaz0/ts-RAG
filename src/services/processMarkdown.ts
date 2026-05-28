@@ -42,8 +42,16 @@ export class MarkdownProcessor extends RagSystem {
       `✓ Embeddings created successfully (${documentEmbeddings.size} chunks embedded)`,
     );
 
+    const metadata = {
+      source: "md",
+      title: mdPath.split("/").pop(),
+    };
     try {
-      await this.embeddingStore?.addEmbeddings(mdChunks, documentEmbeddings);
+      await this.embeddingStore?.addEmbeddings(
+        mdChunks,
+        documentEmbeddings,
+        metadata,
+      );
       console.log(
         `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}`,
       );

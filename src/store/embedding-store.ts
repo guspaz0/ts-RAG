@@ -12,6 +12,7 @@ export interface EmbeddingStore {
   addEmbeddings(
     chunks: string[],
     embeddings: Map<string, LlamaEmbedding>,
+    metadata?: Record<string, any>,
   ): Promise<void>;
   getEmbeddings(query: string, limit: number): Promise<string[]>;
   getAllEmbeddings(): Promise<string[]>;

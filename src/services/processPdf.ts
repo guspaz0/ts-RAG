@@ -38,10 +38,18 @@ export class PdfProcessor extends RagSystem {
     console.log(
       `✓ Embeddings created successfully (${documentEmbeddings.size} chunks embedded)`,
     );
-
+    const metadata = {
+      title: pdfPath.split("/").pop(),
+      date: new Date().toISOString(),
+      source: "pdf",
+    };
     // Store embeddings in PostgreSQL or memory
     try {
-      await this.embeddingStore?.addEmbeddings(pdfChunks, documentEmbeddings);
+      await this.embeddingStore?.addEmbeddings(
+        pdfChunks,
+        documentEmbeddings,
+        metadata,
+      );
       console.log(
         `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}`,
       );

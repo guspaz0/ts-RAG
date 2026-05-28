@@ -1,6 +1,7 @@
 import { createEmbeddingStore, EmbeddingStore } from "../store/embedding-store";
 import { existsSync } from "fs";
 import { createQueryEngine } from "./query-engine";
+import { Reranker } from "./reranker";
 import { Llama, LlamaEmbeddingContext } from "node-llama-cpp";
 
 export abstract class RagSystem {
@@ -9,6 +10,7 @@ export abstract class RagSystem {
   embeddingContext: LlamaEmbeddingContext | null = null;
   embeddingModel: any;
   queryContext: any = null;
+  reranker: Reranker | null = null;
 
   constructor(llama: any) {
     this.llama = llama;
@@ -47,6 +49,14 @@ export abstract class RagSystem {
       }
     } else {
       console.warn("⚠ Language model not found at", llmModelPath);
+    }
+
+    const rerankerPath = process.env["RERANKING_MODEL"] as string;
+    if (rerankerPath && existsSync(rerankerPath)) {
+      this.reranker = new Reranker(rerankerPath);
+      await this.reranker.initialize(this.llama);
+    } else {
+      console.warn("⚠ Reranker model not found at", rerankerPath);
     }
   }
 }
