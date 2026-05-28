@@ -409,19 +409,22 @@ export class PostgresDaemon {
     let programsPath: string = "";
     switch (platform) {
       case "windows":
-        programsPath = execSync("echo %PROGRAMFILES%")
+        programsPath = path.join(execSync("echo %PROGRAMFILES%")
           .toString()
-          .replace("\r\n", "");
+          .replace("\r\n", ""), 'postgres')
         break;
       case "mac":
         // just put the prebuilt binaries in the Applications folder, since we don't have an installer that can place them in Program Files
-        programsPath = path.join("/Applications");
+        programsPath = path.join("/Applications/postgres");
         break;
+      case "linux":
+        programsPath = path.join("/usr/lib/postgresql/16/")
+        break
       default:
         console.log(platform);
         throw new Error("no se puede determinar la carpeta PROGRAMFILES");
     }
-    return path.join(programsPath, "postgres", "bin");
+    return path.join(programsPath, "bin");
   }
 
   async #restartPostgres(): Promise<PostgresServer> {

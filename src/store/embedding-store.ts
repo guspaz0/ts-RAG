@@ -48,7 +48,7 @@ export async function createEmbeddingStore(): Promise<EmbeddingStore> {
       host: process.env["POSTGRES_HOST"] || "localhost",
       dataDir: process.env["POSTGRES_DATA_DIR"] as string,
     };
-    if (!getPostgresDaemon()) {
+    if (!getPostgresDaemon() && config.host == "127.0.0.1") {
       const daemon = await new PostgresDaemon(config).startServer();
       setPostgresDaemon(daemon);
     }
