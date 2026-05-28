@@ -1,7 +1,7 @@
 import { LlamaEmbedding, LlamaEmbeddingContext } from "node-llama-cpp";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf"
 
-const MAX_CONTEXT_CHARS = 2000;
+const MAX_CONTEXT_CHARS = 1024;
 
 export function splitIntoChunks(text: string, maxChunkSize: number = MAX_CONTEXT_CHARS): string[] {
     if (!text || text.length === 0) {

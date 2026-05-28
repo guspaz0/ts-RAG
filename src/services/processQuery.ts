@@ -83,6 +83,15 @@ export class QueryProcessor extends RagSystem {
             allDocuments = similarDocuments?.map((d) => d.text) as string[];
           }
 
+          // Re-rank documents using the reranker model
+          if (this.reranker) {
+            console.log("\n🔄 Re-ranking documents with cross-encoder...");
+            allDocuments = await this.reranker.rank(query, allDocuments, 5);
+            console.log(
+              `✓ Re-ranked to top ${allDocuments.length} most relevant documents`,
+            );
+          }
+
           const result = await queryWithContext(
             this.queryContext,
             query,

@@ -26,14 +26,12 @@ async function processAction(
     await processor.processMarkdown(mdPath);
   }
 }
-const gpuBackend = process.platform === "darwin" ? "metal" : "vulkan";
-
 async function main() {
   try {
     // Setup cleanup handlers
     setupCleanupHandlers();
 
-    const llama = await getLlama({ gpu: gpuBackend });
+    const llama = await getLlama({ gpu: "metal" });
 
     const hasArgs = process.argv.length >= 3;
 
