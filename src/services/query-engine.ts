@@ -65,7 +65,7 @@ export async function queryWithContext(
     );
 
     try {
-      const prompt = `Answer the question based on the context below. Use the information in the context to provide a thorough, accurate answer.
+      const prompt = `Answer the question based on the context below. Use the information in the context to provide a thorough, accurate answer. then traduce it to spanish
 
 Context:
 ${contextText}

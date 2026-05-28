@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { EmbeddingStore } from "./embedding-store";
 import { LlamaEmbedding } from "node-llama-cpp";
 import { PostgresConfig } from "./pgDaemon";
@@ -7,27 +7,45 @@ import { PostgresConfig } from "./pgDaemon";
 export class PgVectorStore implements EmbeddingStore {
   private pool: Pool | null = null;
   private tableName = "embeddings";
+  private dimension = 384;
   isReady = false;
   isInMemory = false;
 
-  async initialize(config: PostgresConfig): Promise<boolean> {
+  async initialize(config: PostgresConfig, dimension?: number): Promise<boolean> {
+    if (dimension) this.dimension = dimension;
     try {
       // Get PostgreSQL connection details from environment or use defaults
       console.log(
         `📦 Connecting to PostgreSQL at ${config.host}:${config.port}...`,
       );
 
-      // Create connection pool
-      this.pool = new Pool({
-        host: config.host || "localhost",
-        port: config.port || 5432,
-        user: config.user || "postgres",
-        password: config.password || "postgres",
-        database: config.database || "embeddings",
-      });
-
       // Test connection
-      const client = await this.pool.connect();
+      const getClient = async (): Promise<PoolClient> => {
+        try {
+          // Create connection pool
+          this.pool = new Pool({
+            host: config.host || "localhost",
+            port: config.port || 5432,
+            user: config.user || "postgres",
+            password: config.password || "postgres",
+            database: config.database || "embeddings",
+          });
+          return await this.pool.connect();
+        } catch (e) {
+          if ((e as Error).message.includes("database " + '"' + config.database + '"' + ' does not exist')) {
+            const pool = new Pool({
+              ...config,
+              database: "postgres"
+            })
+            const client = await pool.connect()
+            await client.query("CREATE DATABASE " + config.database + ";")
+            return await getClient()
+          } else {
+            throw e
+          }
+        }
+      }
+      const client = await getClient()
 
       // Check if pgvector extension is available
       const extensionResult = await client.query(
@@ -39,12 +57,36 @@ export class PgVectorStore implements EmbeddingStore {
         await client.query("CREATE EXTENSION IF NOT EXISTS vector");
       }
 
+      // Check if table exists with a mismatched dimension
+      const tableInfo = await client.query(
+        `SELECT pg_catalog.format_type(atttypid, atttypmod) AS column_type
+         FROM pg_catalog.pg_attribute
+         WHERE attrelid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = $1)
+           AND attname = 'embedding'
+           AND attnum > 0
+           AND NOT attisdropped`,
+        [this.tableName],
+      );
+
+      if (tableInfo.rows.length > 0) {
+        const colType = tableInfo.rows[0].column_type;
+        const match = colType.match(/vector\((\d+)\)/);
+        if (match && parseInt(match[1]) !== this.dimension) {
+          console.warn(
+            `⚠ Existing table has vector(${match[1]}) but model produces ${this.dimension}d embeddings`,
+          );
+          console.warn(
+            `  Drop the table or run: ALTER TABLE ${this.tableName} ALTER COLUMN embedding TYPE vector(${this.dimension});`,
+          );
+        }
+      }
+
       // Create embeddings table if it doesn't exist
       await client.query(`
                 CREATE TABLE IF NOT EXISTS ${this.tableName} (
                     id SERIAL PRIMARY KEY,
                     text TEXT NOT NULL UNIQUE,
-                    embedding vector(384),
+                    embedding vector(${this.dimension}),
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );

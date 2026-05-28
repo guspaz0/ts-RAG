@@ -10,7 +10,7 @@ export class Reranker {
   private modelPath: string;
   private contextSize: number;
 
-  constructor(modelPath: string, contextSize: number = 2048) {
+  constructor(modelPath: string, contextSize: number = 512) {
     this.modelPath = modelPath;
     this.contextSize = contextSize;
   }

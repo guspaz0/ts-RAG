@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { createQueryEngine } from "./query-engine";
 import { Reranker } from "./reranker";
 import { Llama, LlamaEmbeddingContext } from "node-llama-cpp";
+import path from "node:path"
 
 export abstract class RagSystem {
   llama: Llama;
@@ -11,19 +12,30 @@ export abstract class RagSystem {
   embeddingModel: any;
   queryContext: any = null;
   reranker: Reranker | null = null;
+  models: string
 
   constructor(llama: any) {
     this.llama = llama;
+    this.models = process.env["MODELS_PATH"] as string
     //void this.initialize();
   }
   async initialize() {
     try {
-      this.embeddingStore = await createEmbeddingStore();
       this.embeddingModel = await this.llama.loadModel({
-        modelPath: process.env["EMBEDDING_MODEL"] as string,
+        modelPath: path.join(this.models, process.env["EMBEDDING_MODEL"] as string),
       });
+
+      // Detect embedding dimension from model if not specified in env
+      let dimension = parseInt(process.env["EMBEDDING_DIMENSION"] || "");
+      if (isNaN(dimension)) {
+        const tempContext = await this.embeddingModel.createEmbeddingContext();
+        const testEmbedding = await tempContext.getEmbeddingFor("test");
+        dimension = testEmbedding.vector?.length ?? 384;
+      }
+
+      this.embeddingStore = await createEmbeddingStore(dimension);
       console.log(
-        `✓ Embedding store initialized (${this.embeddingStore.isInMemory ? "In-Memory" : "PostgreSQL pgvector"})`,
+        `✓ Embedding store initialized (${this.embeddingStore.isInMemory ? "In-Memory" : "PostgreSQL pgvector"}, ${dimension}d)`,
       );
     } catch (error) {
       console.error("Error loading Llama model:", error);
@@ -33,7 +45,7 @@ export abstract class RagSystem {
   async loadContext() {
     this.embeddingContext = await this.embeddingModel.createEmbeddingContext();
 
-    const llmModelPath = process.env["QUERY_MODEL"] as string;
+    const llmModelPath = path.join(this.models, process.env["QUERY_MODEL"] as string);
     const hasLLMModel = existsSync(llmModelPath);
 
     if (hasLLMModel) {
@@ -51,7 +63,7 @@ export abstract class RagSystem {
       console.warn("⚠ Language model not found at", llmModelPath);
     }
 
-    const rerankerPath = process.env["RERANKING_MODEL"] as string;
+    const rerankerPath = path.join(this.models, process.env["RERANKING_MODEL"] as string);
     if (rerankerPath && existsSync(rerankerPath)) {
       this.reranker = new Reranker(rerankerPath);
       await this.reranker.initialize(this.llama);

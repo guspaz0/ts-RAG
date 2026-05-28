@@ -37,7 +37,7 @@ export function setPostgresDaemon(
   postgresDaemon = daemon;
 }
 
-export async function createEmbeddingStore(): Promise<EmbeddingStore> {
+export async function createEmbeddingStore(dimension?: number): Promise<EmbeddingStore> {
   // Try to initialize pgvector store
   try {
     console.log("📦 Initializing PostgreSQL store...");
@@ -54,7 +54,7 @@ export async function createEmbeddingStore(): Promise<EmbeddingStore> {
       setPostgresDaemon(daemon);
     }
     const pgvectorStore = new PgVectorStore();
-    const initialized = await pgvectorStore.initialize(config);
+    const initialized = await pgvectorStore.initialize(config, dimension);
 
     if (initialized) {
       return pgvectorStore;
