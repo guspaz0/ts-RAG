@@ -1,46 +1,132 @@
 import { RagSystem } from "./ragSystem.ts";
 import { formatQueryResult, queryWithContext } from "./query-engine";
-import { LlamaEmbedding } from "node-llama-cpp";
+import { expandQuery } from "./query-expander";
 
-// Function to process a PDF
+interface RRFResult {
+  text: string;
+  score: number;
+  similarity: number;
+}
+
+function reciprocalRankFusion(
+  results: Array<Array<{ text: string; similarity: number }>>,
+  weights: number[],
+  k: number = 60,
+  topK: number = 30,
+): RRFResult[] {
+  const fused = new Map<string, { score: number; similarity: number }>();
+
+  for (let listIdx = 0; listIdx < results.length; listIdx++) {
+    const list = results[listIdx]!;
+    const weight = weights[listIdx] ?? 1;
+
+    for (let rank = 0; rank < list.length; rank++) {
+      const item = list[rank]!;
+      const existing = fused.get(item.text) ?? { score: 0, similarity: 0 };
+      existing.score += weight / (k + rank + 1);
+      existing.similarity = Math.max(existing.similarity, item.similarity);
+      fused.set(item.text, existing);
+    }
+  }
+
+  return Array.from(fused.entries())
+    .map(([text, { score, similarity }]) => ({ text, score, similarity }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+}
+
 export class QueryProcessor extends RagSystem {
   constructor(llama: any) {
     super(llama);
   }
+
   async processQuery(query: string, pdfPath?: string) {
     console.log(`Query: "${query}"`);
 
-    // If no PDF provided, try to query existing embeddings in pgvector
     if (!pdfPath) {
       console.log(
         "No PDF provided. Querying existing embeddings in pgvector...",
       );
 
       try {
-        // Get embedding for query
         if (!this.embeddingStore) {
           await this.initialize();
         }
         await this.loadContext();
-        const queryEmbedding = (await this.embeddingContext?.getEmbeddingFor(
-          query,
-        )) as LlamaEmbedding;
 
-        // Query pgvector for similar documents
-        const similarDocuments = await this.embeddingStore?.queryByEmbedding(
-          Array.from(queryEmbedding.vector || []),
-          5,
+        const expanded = this.queryContext
+          ? await expandQuery(this.queryContext, query, 2)
+          : { original: query, variants: [], all: () => [query] };
+        const queries = expanded.all();
+
+        const embeddingResults = await Promise.allSettled(
+          queries.map((q) => this.embeddingContext!.getEmbeddingFor(q)),
         );
 
-        if (similarDocuments?.length === 0) {
+        const validSearches: Array<{
+          embedding: number[];
+          weight: number;
+        }> = [];
+
+        for (let i = 0; i < embeddingResults.length; i++) {
+          const result = embeddingResults[i]!;
+          if (result.status === "rejected") {
+            console.warn(
+              `⚠ Failed to embed query variant "${queries[i]}": ${result.reason?.message ?? String(result.reason)}`,
+            );
+            continue;
+          }
+          const vec = Array.from(result.value.vector ?? []);
+          if (vec.length > 0) {
+            validSearches.push({
+              embedding: vec,
+              weight: i === 0 ? 2 : 1,
+            });
+          }
+        }
+
+        const searchResults = await Promise.allSettled(
+          validSearches.map(({ embedding }) =>
+            this.embeddingStore!.queryByEmbedding(embedding, 15),
+          ),
+        );
+
+        const allResultLists: Array<
+          Array<{ text: string; similarity: number }>
+        > = [];
+        const rrfWeights: number[] = [];
+
+        for (let i = 0; i < searchResults.length; i++) {
+          const result = searchResults[i]!;
+          if (result.status === "fulfilled" && result.value.length > 0) {
+            allResultLists.push(result.value);
+            rrfWeights.push(validSearches[i]!.weight);
+          }
+        }
+
+        let fusedDocuments: RRFResult[] = [];
+
+        if (allResultLists.length > 1) {
+          fusedDocuments = reciprocalRankFusion(allResultLists, rrfWeights);
+          console.log(
+            `\n🔀 Fused ${allResultLists.length} search result lists via RRF → ${fusedDocuments.length} candidates`,
+          );
+        } else if (allResultLists.length === 1) {
+          fusedDocuments = allResultLists[0]!.map((d) => ({
+            text: d.text,
+            score: d.similarity,
+            similarity: d.similarity,
+          }));
+        }
+
+        if (fusedDocuments.length === 0) {
           console.warn(
             "No similar documents found in pgvector, trying in-memory store...",
           );
-          // Fallback to in-memory store
           try {
             const memoryDocuments = await this.embeddingStore?.getEmbeddings(
               query,
-              5,
+              10,
             );
             if (memoryDocuments?.length === 0) {
               throw new Error("No similar documents found in any store");
@@ -48,7 +134,6 @@ export class QueryProcessor extends RagSystem {
             console.log(
               `✓ Found ${memoryDocuments?.length} relevant chunks in in-memory store`,
             );
-            // Show relevant context
           } catch (memoryError) {
             throw new Error(
               "Error querying in-memory store: " +
@@ -59,34 +144,31 @@ export class QueryProcessor extends RagSystem {
         }
 
         console.log(
-          `✓ Found ${similarDocuments?.length} relevant chunks in pgvector`,
+          `✓ Found ${fusedDocuments.length} relevant chunks via hybrid search`,
         );
 
-        // Process with language model if available
         if (this.queryContext) {
           console.log("\n🤖 Generating answer with language model...");
-          // Get all embeddings from the database to provide full context
-          let allDocuments: string[] = [];
+          let allDocuments: string[] = fusedDocuments.map((d) => d.text);
+
           try {
-            // Try to get all documents from pgvector first
-            allDocuments =
+            const allDocs =
               (await this.embeddingStore?.getAllEmbeddings()) as string[];
-            console.log(
-              `✓ Retrieved ${allDocuments.length} documents from database for full context`,
-            );
+            if (allDocs && allDocs.length > fusedDocuments.length) {
+              console.log(
+                `✓ Retrieved ${allDocs.length} documents from database for full context`,
+              );
+              allDocuments = allDocs;
+            }
           } catch (error) {
             console.warn(
-              `⚠ Failed to retrieve all documents from database: ${(error as Error).message}`,
+              `⚠ Failed to retrieve all documents: ${(error as Error).message}`,
             );
-            console.warn("  Falling back to using only similar documents...");
-            // Fallback to using similar documents if database access fails
-            allDocuments = similarDocuments?.map((d) => d.text) as string[];
           }
 
-          // Re-rank documents using the reranker model
           if (this.reranker) {
             console.log("\n🔄 Re-ranking documents with cross-encoder...");
-            allDocuments = await this.reranker.rank(query, allDocuments, 5);
+            allDocuments = await this.reranker.rank(query, allDocuments, 15);
             console.log(
               `✓ Re-ranked to top ${allDocuments.length} most relevant documents`,
             );
@@ -111,7 +193,7 @@ export class QueryProcessor extends RagSystem {
         try {
           const similarDocuments = await this.embeddingStore?.getEmbeddings(
             query,
-            5,
+            10,
           );
           if (similarDocuments?.length === 0) {
             throw new Error(
@@ -121,7 +203,6 @@ export class QueryProcessor extends RagSystem {
           console.log(
             `✓ Found ${similarDocuments?.length} relevant chunks in in-memory store`,
           );
-          // Show relevant context
         } catch (fallbackError) {
           throw new Error(
             "Error querying in-memory store: " +

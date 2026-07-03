@@ -22,7 +22,8 @@
     "build": "tsc",
     "start": "GGML_METAL_GPU_TIMEOUT=120000 GGML_METAL_NDEBUG=1 vite-node src/main.ts",
     "dev": "ts-node src/main.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "mcp-server": "vite-node src/mcp-server.ts"
   },
   "keywords": [],
   "author": "",
@@ -37,9 +38,11 @@
   "dependencies": {
     "@langchain/community": "^1.1.19",
     "@langchain/core": "^1.1.28",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
     "node-llama-cpp": "3.18.1",
     "pdf-parse": "1.1.4",
-    "pg": "^8.19.0"
+    "pg": "^8.19.0",
+    "zod": "^4.4.3"
   }
 }

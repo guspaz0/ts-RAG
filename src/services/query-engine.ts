@@ -65,18 +65,19 @@ export async function queryWithContext(
     );
 
     try {
-      const prompt = `Answer the question based on the context below. Use the information in the context to provide a thorough, accurate answer. then traduce it to spanish
+      const prompt = `You are a helpful assitant, you work is generate answer the solution to activities which the user is quering. To solve that activities you would use the context below as a foundational base. after finish, translate all the output to spanish
+
 
 Context:
 ${contextText}
 
-Question: ${query}
+Activities: ${query}
 Answer:`;
 
       const sequence = context.getSequence();
       const completion = new LlamaCompletion({ contextSequence: sequence });
       const answer = await completion.generateCompletion(prompt, {
-        maxTokens: 512,
+        maxTokens: 1024,
         temperature: 0.7,
         topP: 0.9,
       });
