@@ -1,6 +1,6 @@
 # ts-RAG — Sistema de Retrieval Augmented Generation en TypeScript
 
-Sistema RAG (Retrieval Augmented Generation) escrito en TypeScript que ingiere documentos PDF y Markdown, genera embeddings vectoriales usando modelos locales vía `node-llama-cpp`, los almacena en PostgreSQL con pgvector (con fallback a memoria volátil) y responde consultas en lenguaje natural recuperando fragmentos semánticamente similares.
+Sistema RAG (Retrieval Augmented Generation) escrito en TypeScript que ingiere documentos PDF y Markdown, genera embeddings vectoriales usando modelos locales vía `node-llama-cpp`, los almacena en PostgreSQL con pgvector (con fallback a memoria volátil) y responde consultas en lenguaje natural recuperando fragmentos semánticamente similares. Consulta por terminal de comandos o Mcp server.
 
 ## Arquitectura
 
