@@ -4,7 +4,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { createEmbeddingStore, type EmbeddingStore } from "./store/embedding-store.ts";
 import { getLlama, type LlamaEmbeddingContext } from "node-llama-cpp";
+import { parsePDF, splitIntoChunks, embedDocuments } from "./services/pdf-embeddings.ts";
 import path from "node:path";
+import fs from "node:fs";
 
 let store: EmbeddingStore;
 let embeddingContext: LlamaEmbeddingContext | null = null;
@@ -52,6 +54,74 @@ server.registerTool("search_embeddings", {
       text: results.length > 0
         ? results.map((t, i) => `[${i + 1}] ${t}`).join("\n\n---\n\n")
         : "No results found",
+    }],
+  };
+});
+
+server.registerTool("create_embeddings", {
+  description: "Create embeddings from a PDF file or raw text and store them in the database",
+  inputSchema: z.object({
+    source: z.enum(["pdf", "text"]).describe("Where the content comes from"),
+    pdf_path: z.string().optional().describe("Absolute path to a PDF file (required when source='pdf')"),
+    text: z.string().optional().describe("Raw text to embed (required when source='text')"),
+    max_chunk_size: z.number().int().min(64).max(4096).default(1024).describe("Maximum characters per chunk"),
+  }),
+}, async (args) => {
+  const { source, pdf_path, text, max_chunk_size } = args;
+
+  if (!embeddingContext) {
+    throw new Error("Embedding model is not loaded; cannot create embeddings");
+  }
+
+  let chunks: string[];
+  let sourceName: string;
+
+  if (source === "pdf") {
+    if (!pdf_path) throw new Error("pdf_path is required when source='pdf'");
+    const resolved = path.resolve(pdf_path);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`PDF file not found: ${resolved}`);
+    }
+    chunks = await parsePDF(resolved);
+    sourceName = path.basename(resolved);
+  } else {
+    if (!text || text.trim().length === 0) {
+      throw new Error("text is required when source='text'");
+    }
+    chunks = splitIntoChunks(text, max_chunk_size);
+    sourceName = "text";
+  }
+
+  if (chunks.length === 0) {
+    throw new Error("No content extracted from the input");
+  }
+
+  const embeddings = await embedDocuments(embeddingContext, chunks);
+  if (embeddings.size === 0) {
+    throw new Error("Failed to create any embeddings");
+  }
+
+  const metadata = {
+    source,
+    title: sourceName,
+    date: new Date().toISOString(),
+  };
+  await store.addEmbeddings(chunks, embeddings, metadata);
+
+  const total = (await store.getAllEmbeddings()).length;
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(
+        {
+          stored: embeddings.size,
+          totalInStore: total,
+          storeType: store.isInMemory ? "in-memory" : "pgvector",
+          source: sourceName,
+        },
+        null,
+        2,
+      ),
     }],
   };
 });

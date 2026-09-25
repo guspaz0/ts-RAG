@@ -20,10 +20,17 @@ export abstract class RagSystem {
     //void this.initialize();
   }
   async initialize() {
+    const modelPath = path.join(this.models, process.env["EMBEDDING_MODEL"] as string);
+    console.log(`📦 Loading embedding model from: ${modelPath}`);
+
+    if (!existsSync(modelPath)) {
+      console.error(`✖ Model file not found: ${modelPath}`);
+      console.error(`  Check MODELS_PATH and EMBEDDING_MODEL in .env`);
+      process.exit(1);
+    }
+
     try {
-      this.embeddingModel = await this.llama.loadModel({
-        modelPath: path.join(this.models, process.env["EMBEDDING_MODEL"] as string),
-      });
+      this.embeddingModel = await this.llama.loadModel({ modelPath });
 
       // Detect embedding dimension from model if not specified in env
       let dimension = parseInt(process.env["EMBEDDING_DIMENSION"] || "");
@@ -38,17 +45,36 @@ export abstract class RagSystem {
         `✓ Embedding store initialized (${this.embeddingStore.isInMemory ? "In-Memory" : "PostgreSQL pgvector"}, ${dimension}d)`,
       );
     } catch (error) {
-      console.error("Error loading Llama model:", error);
+      console.error(`✖ Failed to load embedding model from ${modelPath}:`);
+      console.error(`  ${(error as Error).message}`);
+      if ((error as Error).stack) {
+        console.error(`  ${(error as Error).stack!.split("\n").slice(0, 5).join("\n  ")}`);
+      }
       process.exit(1);
     }
   }
   async loadContext() {
     this.embeddingContext = await this.embeddingModel.createEmbeddingContext();
+    // Note: The query LLM and reranker are loaded on-demand via
+    // loadQueryModel() and loadReranker() to avoid loading all models
+    // into memory simultaneously.
+  }
+
+  /**
+   * Load the query LLM (~4.7GB). Disposes the reranker first if loaded.
+   */
+  async loadQueryModel(): Promise<void> {
+    if (this.queryContext) return; // already loaded
+
+    // Dispose the reranker to free memory for the LLM
+    if (this.reranker) {
+      console.log("🗑 Disposing reranker to free memory for language model...");
+      this.reranker.dispose();
+      this.reranker = null;
+    }
 
     const llmModelPath = path.join(this.models, process.env["QUERY_MODEL"] as string);
-    const hasLLMModel = existsSync(llmModelPath);
-
-    if (hasLLMModel) {
+    if (existsSync(llmModelPath)) {
       try {
         this.queryContext = await createQueryEngine(this.llama, llmModelPath);
         if (this.queryContext) {
@@ -56,11 +82,29 @@ export abstract class RagSystem {
         }
       } catch (error) {
         console.warn(
-          "⚠ Language model failed to load, will show retrieval results only",
+          `⚠ Language model failed to load: ${(error as Error).message}`,
         );
       }
     } else {
       console.warn("⚠ Language model not found at", llmModelPath);
+    }
+  }
+
+  /**
+   * Load the reranker model (~600MB). Disposes the LLM first if loaded.
+   */
+  async loadReranker(): Promise<void> {
+    if (this.reranker) return; // already loaded
+
+    // Dispose the LLM to free memory for the reranker
+    if (this.queryContext) {
+      console.log("🗑 Disposing language model to free memory for reranker...");
+      try {
+        this.queryContext.dispose();
+      } catch {
+        // ignore
+      }
+      this.queryContext = null;
     }
 
     const rerankerPath = path.join(this.models, process.env["RERANKING_MODEL"] as string);

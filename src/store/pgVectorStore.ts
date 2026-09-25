@@ -106,12 +106,17 @@ export class PgVectorStore implements EmbeddingStore {
       console.log(`✓ Table '${this.tableName}' ready for embeddings`);
       return true;
     } catch (error) {
-      console.warn(
-        `⚠ PostgreSQL initialization failed: ${(error as Error).message}`,
-      );
-      console.warn(
-        `  Connection string: ${process.env["PG_HOST"] || "localhost"}:${process.env["PG_PORT"] || 5432}`,
-      );
+      const msg = (error as Error).message;
+      console.warn(`⚠ PostgreSQL initialization failed: ${msg}`);
+      if (msg.includes('extension "vector" is not available')) {
+        console.warn(
+          "  The pgvector extension is not installed for this PostgreSQL build.\n"
+          + "  Options:\n"
+          + "   1. Install it:  sudo apt install postgresql-16-pgvector\n"
+          + "   2. Use the bundled Docker setup (pgvector image):\n"
+          + "        docker compose up -d   # then set POSTGRES_HOST/PORT in .env",
+        );
+      }
       console.warn("  Falling back to in-memory storage");
       if (this.pool) {
         await this.pool.end();

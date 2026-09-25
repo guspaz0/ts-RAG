@@ -31,7 +31,7 @@ async function main() {
     // Setup cleanup handlers
     setupCleanupHandlers();
 
-    const llama = await getLlama({ gpu: "metal" });
+    const llama = await getLlama({ gpu: "auto" });
 
     const hasArgs = process.argv.length >= 3;
 

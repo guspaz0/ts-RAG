@@ -53,4 +53,15 @@ export class Reranker {
       return documents.slice(0, topK);
     }
   }
+
+  dispose(): void {
+    if (this.context) {
+      try {
+        this.context.dispose();
+      } catch {
+        // ignore
+      }
+      this.context = null;
+    }
+  }
 }

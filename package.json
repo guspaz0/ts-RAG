@@ -23,7 +23,8 @@
     "start": "GGML_METAL_GPU_TIMEOUT=120000 GGML_METAL_NDEBUG=1 vite-node src/main.ts",
     "dev": "ts-node src/main.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "mcp-server": "vite-node src/mcp-server.ts"
+    "mcp-server": "vite-node src/mcp-server.ts",
+    "mcp-http": "vite-node src/mcp-http-server.ts"
   },
   "keywords": [],
   "author": "",
@@ -36,10 +37,12 @@
     "vite-node": "^6.0.0"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.1",
     "@langchain/community": "^1.1.19",
     "@langchain/core": "^1.1.28",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
+    "hono": "^4.13.8",
     "node-llama-cpp": "3.18.1",
     "pdf-parse": "1.1.4",
     "pg": "^8.19.0",

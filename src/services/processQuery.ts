@@ -120,6 +120,16 @@ export class QueryProcessor extends RagSystem {
         }
 
         if (fusedDocuments.length === 0) {
+          const allStored = await this.embeddingStore?.getAllEmbeddings();
+          if (!allStored || allStored.length === 0) {
+            console.error(
+              "✖ The embedding store is empty — no documents have been indexed yet.",
+            );
+            console.error(
+              "  Index a document first, e.g.: npm start -- --pdf <path>",
+            );
+            return;
+          }
           console.warn(
             "No similar documents found in pgvector, trying in-memory store...",
           );
@@ -147,39 +157,45 @@ export class QueryProcessor extends RagSystem {
           `✓ Found ${fusedDocuments.length} relevant chunks via hybrid search`,
         );
 
+        // Re-rank documents using the cross-encoder (no LLM needed for this step)
+        let allDocuments: string[] = fusedDocuments.map((d) => d.text);
+
+        try {
+          const allDocs =
+            (await this.embeddingStore?.getAllEmbeddings()) as string[];
+          if (allDocs && allDocs.length > fusedDocuments.length) {
+            console.log(
+              `✓ Retrieved ${allDocs.length} documents from database for full context`,
+            );
+            allDocuments = allDocs;
+          }
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to retrieve all documents: ${(error as Error).message}`,
+          );
+        }
+
+        // Load the reranker (this is lightweight, ~600MB)
+        await this.loadReranker();
+
+        if (this.reranker) {
+          console.log("\n🔄 Re-ranking documents with cross-encoder...");
+          allDocuments = await this.reranker.rank(query, allDocuments, 15);
+          console.log(
+            `✓ Re-ranked to top ${allDocuments.length} most relevant documents`,
+          );
+        }
+
+        // Now load the LLM for answer generation (disposes reranker first to free memory)
+        await this.loadQueryModel();
+
         if (this.queryContext) {
           console.log("\n🤖 Generating answer with language model...");
-          let allDocuments: string[] = fusedDocuments.map((d) => d.text);
-
-          try {
-            const allDocs =
-              (await this.embeddingStore?.getAllEmbeddings()) as string[];
-            if (allDocs && allDocs.length > fusedDocuments.length) {
-              console.log(
-                `✓ Retrieved ${allDocs.length} documents from database for full context`,
-              );
-              allDocuments = allDocs;
-            }
-          } catch (error) {
-            console.warn(
-              `⚠ Failed to retrieve all documents: ${(error as Error).message}`,
-            );
-          }
-
-          if (this.reranker) {
-            console.log("\n🔄 Re-ranking documents with cross-encoder...");
-            allDocuments = await this.reranker.rank(query, allDocuments, 15);
-            console.log(
-              `✓ Re-ranked to top ${allDocuments.length} most relevant documents`,
-            );
-          }
-
           const result = await queryWithContext(
             this.queryContext,
             query,
             allDocuments,
           );
-
           console.log(formatQueryResult(result));
         } else {
           console.log("\n⚠ Language model not available.");
@@ -204,10 +220,15 @@ export class QueryProcessor extends RagSystem {
             `✓ Found ${similarDocuments?.length} relevant chunks in in-memory store`,
           );
         } catch (fallbackError) {
-          throw new Error(
-            "Error querying in-memory store: " +
-              (fallbackError as Error).message,
-          );
+          const msg = (fallbackError as Error).message;
+          if (msg.includes("No similar documents found")) {
+            console.error(
+              "✖ The embedding store is empty — no documents have been indexed yet.\n"
+              + "  Index a document first, e.g.: npm start -- --pdf <path>",
+            );
+            return;
+          }
+          throw new Error("Error querying in-memory store: " + msg);
         }
       }
       return;
