@@ -4,23 +4,32 @@ import { PgVectorStore } from "./pgVectorStore";
 import { PostgresConfig, PostgresDaemon, PostgresServer } from "./pgDaemon";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import type { CatalogStore, Catalog } from "./catalogs";
 
 dotenv.config();
 
 export interface EmbeddingStore {
   isReady: boolean;
   isInMemory: boolean;
+  /** Catalog management layer (always available, even in-memory). */
+  readonly catalogStore: CatalogStore;
   addEmbeddings(
     chunks: string[],
     embeddings: Map<string, LlamaEmbedding>,
     metadata?: Record<string, any>,
+    catalogId?: string | null,
   ): Promise<void>;
-  getEmbeddings(query: string, limit: number): Promise<string[]>;
-  getAllEmbeddings(): Promise<string[]>;
-  clear(): Promise<void>;
+  getEmbeddings(
+    query: string,
+    limit: number,
+    catalogId?: string | null,
+  ): Promise<string[]>;
+  getAllEmbeddings(catalogId?: string | null): Promise<string[]>;
+  clear(catalogId?: string | null): Promise<void>;
   queryByEmbedding(
     embedding: number[],
     limit: number,
+    catalogId?: string | null,
   ): Promise<Array<{ text: string; similarity: number }>>;
 }
 
@@ -112,6 +121,7 @@ export async function createEmbeddingStore(dimension?: number): Promise<Embeddin
     const initialized = await pgvectorStore.initialize(config, dimension);
 
     if (initialized) {
+      await migrateLegacyEmbeddings(pgvectorStore);
       return pgvectorStore;
     }
     throw new Error("Failed to initialize PostgreSQL store");
@@ -135,17 +145,55 @@ export async function storeEmbeddingsWithFallback(
   store: EmbeddingStore,
   chunks: string[],
   embeddings: Map<string, LlamaEmbedding>,
+  metadata?: Record<string, any>,
+  catalogId?: string | null,
 ): Promise<void> {
   try {
-    await store.addEmbeddings(chunks, embeddings);
+    await store.addEmbeddings(chunks, embeddings, metadata, catalogId);
   } catch (error) {
     if (!store.isInMemory) {
       console.warn("⚠ Failed to store in PostgreSQL, using in-memory fallback");
       const memoryStore = new InMemoryStore();
-      await memoryStore.addEmbeddings(chunks, embeddings);
+      await memoryStore.addEmbeddings(chunks, embeddings, metadata, catalogId);
     } else {
       throw error;
     }
+  }
+}
+
+/**
+ * One-time migration: assign embeddings created before catalogs existed
+ * (catalog_id IS NULL) to a default "general" catalog.
+ */
+async function migrateLegacyEmbeddings(store: EmbeddingStore): Promise<void> {
+  try {
+    if (store.isInMemory) return;
+    const unassigned = await store.getAllEmbeddings(null);
+    if (unassigned.length === 0) return;
+
+    const catalog = await store.catalogStore.getCatalog("general");
+    if (!catalog) {
+      const created = await store.catalogStore.createCatalog(
+        "general",
+        "Default catalog for embeddings created before catalogs existed",
+      );
+      console.log(`📚 Created default catalog "${created.name}" for legacy embeddings`);
+      return;
+    }
+
+    // Move unassigned rows into the "general" catalog
+    const client = await (store as any).pool.connect();
+    try {
+      await client.query(
+        `UPDATE embeddings SET catalog_id = $1 WHERE catalog_id IS NULL`,
+        [catalog.id],
+      );
+      console.log(`✓ Migrated ${unassigned.length} legacy embeddings into catalog "${catalog.name}"`);
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.warn(`⚠ Catalog migration skipped: ${(error as Error).message}`);
   }
 }
 

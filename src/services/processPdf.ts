@@ -37,12 +37,19 @@ export class PdfProcessor extends RagSystem {
   constructor(llama: any) {
     super(llama);
   }
-  async processPDF(pdfPath: string, query?: string | null) {
+  async processPDF(
+    pdfPath: string,
+    query?: string | null,
+    catalog?: { id: string; name: string } | null,
+  ) {
     if (!this.embeddingStore) {
       await this.initialize();
     }
 
     console.log(`📄 Parsing PDF from: ${pdfPath}`);
+    if (catalog) {
+      console.log(`📚 Target catalog: ${catalog.name}`);
+    }
     if (!pdfPath) throw new Error("Pdf file not provided");
     const pdfChunks = await parsePDF(pdfPath);
 
@@ -74,9 +81,11 @@ export class PdfProcessor extends RagSystem {
         pdfChunks,
         documentEmbeddings,
         metadata,
+        catalog?.id ?? null,
       );
       console.log(
-        `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}`,
+        `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}` +
+          (catalog ? ` (catalog: ${catalog.name})` : ""),
       );
     } catch (error) {
       console.warn(`⚠ Failed to store embeddings: ${(error as Error).message}`);

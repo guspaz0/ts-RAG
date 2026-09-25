@@ -38,12 +38,19 @@ export class MarkdownProcessor extends RagSystem {
   constructor(llama: any) {
     super(llama);
   }
-  async processMarkdown(mdPath: string, query?: string | null) {
+  async processMarkdown(
+    mdPath: string,
+    query?: string | null,
+    catalog?: { id: string; name: string } | null,
+  ) {
     if (!this.embeddingStore) {
       await this.initialize();
     }
 
     console.log(`📄 Reading Markdown from: ${mdPath}`);
+    if (catalog) {
+      console.log(`📚 Target catalog: ${catalog.name}`);
+    }
     if (!mdPath) throw new Error("Markdown file not provided");
 
     const content = fs.readFileSync(mdPath, "utf-8");
@@ -77,9 +84,11 @@ export class MarkdownProcessor extends RagSystem {
         mdChunks,
         documentEmbeddings,
         metadata,
+        catalog?.id ?? null,
       );
       console.log(
-        `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}`,
+        `✓ Embeddings stored in ${this.embeddingStore?.isInMemory ? "memory" : "PostgreSQL pgvector"}` +
+          (catalog ? ` (catalog: ${catalog.name})` : ""),
       );
     } catch (error) {
       console.warn(`⚠ Failed to store embeddings: ${(error as Error).message}`);

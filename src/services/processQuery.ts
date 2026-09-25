@@ -40,13 +40,23 @@ export class QueryProcessor extends RagSystem {
     super(llama);
   }
 
-  async processQuery(query: string, pdfPath?: string) {
+  async processQuery(
+    query: string,
+    pdfPath?: string,
+    catalog?: { id: string; name: string } | null,
+  ) {
     console.log(`Query: "${query}"`);
 
     if (!pdfPath) {
       console.log(
         "No PDF provided. Querying existing embeddings in pgvector...",
       );
+      if (catalog) {
+        console.log(`📚 Querying catalog: ${catalog.name}`);
+      } else {
+        console.log("📚 Querying all catalogs");
+      }
+      const catalogId = catalog?.id ?? null;
 
       try {
         if (!this.embeddingStore) {
@@ -87,7 +97,7 @@ export class QueryProcessor extends RagSystem {
 
         const searchResults = await Promise.allSettled(
           validSearches.map(({ embedding }) =>
-            this.embeddingStore!.queryByEmbedding(embedding, 15),
+            this.embeddingStore!.queryByEmbedding(embedding, 15, catalogId),
           ),
         );
 
@@ -120,13 +130,13 @@ export class QueryProcessor extends RagSystem {
         }
 
         if (fusedDocuments.length === 0) {
-          const allStored = await this.embeddingStore?.getAllEmbeddings();
+          const allStored = await this.embeddingStore?.getAllEmbeddings(catalogId);
           if (!allStored || allStored.length === 0) {
             console.error(
               "✖ The embedding store is empty — no documents have been indexed yet.",
             );
             console.error(
-              "  Index a document first, e.g.: npm start -- --pdf <path>",
+              "  Index a document first, e.g.: npm start -- --pdf <path> --catalog <name>",
             );
             return;
           }
@@ -137,6 +147,7 @@ export class QueryProcessor extends RagSystem {
             const memoryDocuments = await this.embeddingStore?.getEmbeddings(
               query,
               10,
+              catalogId,
             );
             if (memoryDocuments?.length === 0) {
               throw new Error("No similar documents found in any store");
@@ -162,7 +173,7 @@ export class QueryProcessor extends RagSystem {
 
         try {
           const allDocs =
-            (await this.embeddingStore?.getAllEmbeddings()) as string[];
+            (await this.embeddingStore?.getAllEmbeddings(catalogId)) as string[];
           if (allDocs && allDocs.length > fusedDocuments.length) {
             console.log(
               `✓ Retrieved ${allDocs.length} documents from database for full context`,
@@ -210,6 +221,7 @@ export class QueryProcessor extends RagSystem {
           const similarDocuments = await this.embeddingStore?.getEmbeddings(
             query,
             10,
+            catalogId,
           );
           if (similarDocuments?.length === 0) {
             throw new Error(

@@ -2,6 +2,7 @@ import { Pool, PoolClient } from "pg";
 import { EmbeddingStore } from "./embedding-store";
 import { LlamaEmbedding } from "node-llama-cpp";
 import { PostgresConfig } from "./pgDaemon";
+import { PgCatalogStore, type CatalogStore } from "./catalogs";
 
 // PgVector store using PostgreSQL with pgvector extension
 export class PgVectorStore implements EmbeddingStore {
@@ -10,6 +11,7 @@ export class PgVectorStore implements EmbeddingStore {
   private dimension = 384;
   isReady = false;
   isInMemory = false;
+  catalogStore: CatalogStore | null = null;
 
   async initialize(config: PostgresConfig, dimension?: number): Promise<boolean> {
     if (dimension) this.dimension = dimension;
@@ -85,12 +87,19 @@ export class PgVectorStore implements EmbeddingStore {
       await client.query(`
                 CREATE TABLE IF NOT EXISTS ${this.tableName} (
                     id SERIAL PRIMARY KEY,
-                    text TEXT NOT NULL UNIQUE,
+                    text TEXT NOT NULL,
                     embedding vector(${this.dimension}),
+                    catalog_id UUID,
                     metadata JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             `);
+
+      // Backward compatibility: older schemas had a UNIQUE constraint on text
+      // which breaks catalog usage (the same chunk can live in several catalogs).
+      await client.query(
+        `ALTER TABLE ${this.tableName} DROP CONSTRAINT IF EXISTS embeddings_text_key`,
+      );
 
       // Create index for vector similarity search (for faster queries)
       await client.query(`
@@ -98,6 +107,10 @@ export class PgVectorStore implements EmbeddingStore {
                 ON ${this.tableName} USING ivfflat (embedding vector_cosine_ops)
                 WITH (lists = 100);
             `);
+
+      // Catalog schema (catalogs table + catalog_id column + index)
+      this.catalogStore = new PgCatalogStore(this.pool);
+      await this.catalogStore.ensureSchema();
 
       client.release();
 
@@ -129,6 +142,8 @@ export class PgVectorStore implements EmbeddingStore {
   async addEmbeddings(
     _chunks: string[],
     embeddings: Map<string, LlamaEmbedding>,
+    metadata?: Record<string, any>,
+    catalogId?: string | null,
   ): Promise<void> {
     if (!this.isReady || !this.pool) {
       throw new Error("PostgreSQL connection not initialized");
@@ -147,20 +162,28 @@ export class PgVectorStore implements EmbeddingStore {
             ? `[${Array.from(embedding.vector).join(",")}]`
             : null;
 
-          const metadata = {
+          const mergedMetadata = {
             source: "pdf",
             timestamp: new Date().toISOString(),
             length: text.length,
+            ...metadata,
           };
 
-          // Use INSERT ... ON CONFLICT to handle duplicates
+          // Skip if this exact chunk already exists in the target catalog
+          const existing = await client.query(
+            `SELECT 1 FROM ${this.tableName}
+              WHERE text = $1 AND catalog_id IS ${catalogId ? '= $2' : 'NULL'}`,
+            catalogId ? [text, catalogId] : [text],
+          );
+          if (existing.rows.length > 0) {
+            skipCount++;
+            continue;
+          }
+
           await client.query(
-            `INSERT INTO ${this.tableName} (text, embedding, metadata) 
-                            VALUES ($1, $2::vector, $3::jsonb)
-                            ON CONFLICT (text) DO UPDATE SET 
-                            embedding = EXCLUDED.embedding,
-                            metadata = EXCLUDED.metadata`,
-            [text, vector, JSON.stringify(metadata)],
+            `INSERT INTO ${this.tableName} (text, embedding, catalog_id, metadata)
+             VALUES ($1, $2::vector, $3, $4::jsonb)`,
+            [text, vector, catalogId ?? null, JSON.stringify(mergedMetadata)],
           );
 
           successCount++;
@@ -184,7 +207,11 @@ export class PgVectorStore implements EmbeddingStore {
     }
   }
 
-  async getEmbeddings(_queryText: string, limit: number): Promise<string[]> {
+  async getEmbeddings(
+    _queryText: string,
+    limit: number,
+    catalogId?: string | null,
+  ): Promise<string[]> {
     if (!this.isReady || !this.pool) {
       throw new Error("PostgreSQL connection not initialized");
     }
@@ -196,11 +223,14 @@ export class PgVectorStore implements EmbeddingStore {
         // Query for similar embeddings using cosine distance
         // Note: We use text similarity as a placeholder since we don't have query embedding here
         // The actual semantic ranking happens in pdf-embeddings.ts using findSimilarDocuments
+        const catalogClause = catalogId ? "WHERE catalog_id = $2" : "";
+        const params = catalogId ? [limit, catalogId] : [limit];
         const result = await client.query(
           `SELECT text FROM ${this.tableName}
-                     ORDER BY created_at DESC
-                     LIMIT $1`,
-          [limit],
+             ${catalogClause}
+             ORDER BY created_at DESC
+             LIMIT $1`,
+          params,
         );
 
         return result.rows.map((row) => row.text);
@@ -213,7 +243,7 @@ export class PgVectorStore implements EmbeddingStore {
     }
   }
 
-  async getAllEmbeddings(): Promise<string[]> {
+  async getAllEmbeddings(catalogId?: string | null): Promise<string[]> {
     if (!this.isReady || !this.pool) {
       throw new Error("PostgreSQL connection not initialized");
     }
@@ -223,9 +253,13 @@ export class PgVectorStore implements EmbeddingStore {
 
       try {
         // Get all embeddings ordered by creation date
+        const catalogClause = catalogId ? "WHERE catalog_id = $1" : "";
+        const params = catalogId ? [catalogId] : [];
         const result = await client.query(
           `SELECT text FROM ${this.tableName}
-                     ORDER BY created_at ASC`,
+             ${catalogClause}
+             ORDER BY created_at ASC`,
+          params,
         );
 
         return result.rows.map((row) => row.text);
@@ -241,6 +275,7 @@ export class PgVectorStore implements EmbeddingStore {
   async queryByEmbedding(
     embedding: number[],
     limit: number,
+    catalogId?: string | null,
   ): Promise<Array<{ text: string; similarity: number }>> {
     if (!this.isReady || !this.pool) {
       throw new Error("PostgreSQL connection not initialized");
@@ -251,14 +286,17 @@ export class PgVectorStore implements EmbeddingStore {
 
       try {
         const vectorString = `[${embedding.join(",")}]`;
+        const catalogClause = catalogId ? "WHERE catalog_id = $3" : "";
+        const params = catalogId ? [vectorString, limit, catalogId] : [vectorString, limit];
 
         // Query using cosine similarity (<-> operator)
         const result = await client.query(
           `SELECT text, 1 - (embedding <-> $1::vector) as similarity
-                     FROM ${this.tableName}
-                     ORDER BY similarity DESC
-                     LIMIT $2`,
-          [vectorString, limit],
+             FROM ${this.tableName}
+             ${catalogClause}
+             ORDER BY similarity DESC
+             LIMIT $2`,
+          params,
         );
 
         return result.rows.map((row) => ({
@@ -275,13 +313,24 @@ export class PgVectorStore implements EmbeddingStore {
     }
   }
 
-  async clear(): Promise<void> {
+  async clear(catalogId?: string | null): Promise<void> {
     if (this.isReady && this.pool) {
       try {
         const client = await this.pool.connect();
         try {
-          await client.query(`DELETE FROM ${this.tableName}`);
-          console.log("✓ PostgreSQL embeddings table cleared");
+          if (catalogId) {
+            await client.query(
+              `DELETE FROM ${this.tableName} WHERE catalog_id = $1`,
+              [catalogId],
+            );
+          } else {
+            await client.query(`DELETE FROM ${this.tableName}`);
+          }
+          console.log(
+            catalogId
+              ? `✓ Embeddings cleared for catalog ${catalogId}`
+              : "✓ PostgreSQL embeddings table cleared",
+          );
         } finally {
           client.release();
         }

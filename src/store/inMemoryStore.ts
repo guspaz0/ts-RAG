@@ -1,34 +1,58 @@
 import { LlamaEmbedding } from "node-llama-cpp";
 import { EmbeddingStore } from "./embedding-store";
+import { InMemoryCatalogStore, type CatalogStore, type Catalog } from "./catalogs";
+
+interface StoredChunk {
+  text: string;
+  vector: number[];
+  catalogId: string | null;
+}
 
 // In-memory store fallback
 export class InMemoryStore implements EmbeddingStore {
   isReady = true;
   isInMemory = true;
-  private embeddings: Map<string, number[]> = new Map();
+  catalogStore: CatalogStore = new InMemoryCatalogStore();
+  private chunks: StoredChunk[] = [];
 
   async addEmbeddings(
     _chunks: string[],
     embeddings: Map<string, LlamaEmbedding>,
+    _metadata?: Record<string, any>,
+    catalogId?: string | null,
   ): Promise<void> {
     console.log("📦 Storing embeddings in memory...");
 
     for (const [text, embedding] of embeddings) {
       const vector = embedding.vector ? Array.from(embedding.vector) : [];
       if (vector.length > 0) {
-        this.embeddings.set(text, vector);
+        // Skip if this exact chunk already exists in the target catalog
+        const exists = this.chunks.some(
+          (c) => c.text === text && c.catalogId === catalogId,
+        );
+        if (!exists) {
+          this.chunks.push({ text, vector, catalogId: catalogId ?? null });
+        }
       }
     }
 
-    console.log(`✓ Stored ${this.embeddings.size} embeddings in memory`);
+    console.log(`✓ Stored ${this.chunks.length} embeddings in memory`);
   }
 
-  async getAllEmbeddings(): Promise<string[]> {
-    return Array.from(this.embeddings.keys());
+  async getAllEmbeddings(catalogId?: string | null): Promise<string[]> {
+    return this.chunks
+      .filter((c) => c.catalogId === catalogId)
+      .map((c) => c.text);
   }
 
-  async getEmbeddings(_query: string, limit: number): Promise<string[]> {
-    return Array.from(this.embeddings.keys()).slice(0, limit);
+  async getEmbeddings(
+    _query: string,
+    limit: number,
+    catalogId?: string | null,
+  ): Promise<string[]> {
+    return this.getAllEmbeddings(catalogId).then((texts) =>
+      texts.slice(0, limit),
+    );
   }
 
   /**
@@ -38,10 +62,12 @@ export class InMemoryStore implements EmbeddingStore {
   async queryByEmbedding(
     embedding: number[],
     limit: number,
+    catalogId?: string | null,
   ): Promise<Array<{ text: string; similarity: number }>> {
     const results: Array<{ text: string; similarity: number }> = [];
 
-    for (const [text, vec] of this.embeddings) {
+    for (const { text, vector: vec, catalogId: cid } of this.chunks) {
+      if (cid !== catalogId) continue;
       if (vec.length !== embedding.length) continue;
       let dot = 0;
       let normA = 0;
@@ -63,7 +89,11 @@ export class InMemoryStore implements EmbeddingStore {
       .slice(0, limit);
   }
 
-  async clear(): Promise<void> {
-    this.embeddings.clear();
+  async clear(catalogId?: string | null): Promise<void> {
+    if (catalogId) {
+      this.chunks = this.chunks.filter((c) => c.catalogId !== catalogId);
+    } else {
+      this.chunks = [];
+    }
   }
 }

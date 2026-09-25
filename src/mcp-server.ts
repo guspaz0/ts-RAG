@@ -24,20 +24,30 @@ const server = new McpServer(
 );
 
 server.registerTool("search_embeddings", {
-  description: "Search for similar text chunks in the embedding store using semantic similarity",
+  description: "Search for similar text chunks in the embedding store using semantic similarity. Optionally restrict the search to a single catalog by name.",
   inputSchema: z.object({
     query: z.string().describe("The text query to search for"),
     limit: z.number().min(1).max(100).default(10).describe("Maximum number of results to return"),
+    catalog: z.string().optional().describe("Catalog name to restrict the search to (omit to search all catalogs)"),
   }),
 }, async (args) => {
-  const { query, limit } = args;
+  const { query, limit, catalog } = args;
+
+  let catalogId: string | null = null;
+  if (catalog) {
+    const found = await store.catalogStore.getCatalog(catalog);
+    if (!found) {
+      throw new Error(`Catalog "${catalog}" not found`);
+    }
+    catalogId = found.id;
+  }
 
   if (embeddingContext) {
     const embedding = await embeddingContext.getEmbeddingFor(query);
     const vector = embedding.vector ? Array.from(embedding.vector) : [];
 
     if (vector.length > 0) {
-      const results = await store.queryByEmbedding(vector, limit);
+      const results = await store.queryByEmbedding(vector, limit, catalogId);
       const content = results.map((r) =>
         `[${(r.similarity * 100).toFixed(1)}%] ${r.text}`
       ).join("\n\n---\n\n");
@@ -47,7 +57,7 @@ server.registerTool("search_embeddings", {
     }
   }
 
-  const results = await store.getEmbeddings(query, limit);
+  const results = await store.getEmbeddings(query, limit, catalogId);
   return {
     content: [{
       type: "text" as const,
@@ -59,15 +69,37 @@ server.registerTool("search_embeddings", {
 });
 
 server.registerTool("create_embeddings", {
-  description: "Create embeddings from a PDF file or raw text and store them in the database",
+  description: "Create embeddings from a PDF file or raw text and store them in the database. The catalog parameter is required: use an existing catalog name or the string 'new:<name>' to create a new one.",
   inputSchema: z.object({
     source: z.enum(["pdf", "text"]).describe("Where the content comes from"),
     pdf_path: z.string().optional().describe("Absolute path to a PDF file (required when source='pdf')"),
     text: z.string().optional().describe("Raw text to embed (required when source='text')"),
     max_chunk_size: z.number().int().min(64).max(4096).default(1024).describe("Maximum characters per chunk"),
+    catalog: z.string().describe("Catalog name to store embeddings in, or 'new:<name>' to create a new catalog first"),
   }),
 }, async (args) => {
-  const { source, pdf_path, text, max_chunk_size } = args;
+  const { source, pdf_path, text, max_chunk_size, catalog } = args;
+
+  if (!catalog || catalog.trim().length === 0) {
+    throw new Error("catalog is required");
+  }
+
+  let catalogId: string;
+  let catalogName: string;
+  if (catalog.startsWith("new:")) {
+    const newName = catalog.slice(4).trim();
+    if (!newName) throw new Error("New catalog name cannot be empty");
+    const created = await store.catalogStore.createCatalog(newName);
+    catalogId = created.id;
+    catalogName = created.name;
+  } else {
+    const found = await store.catalogStore.getCatalog(catalog);
+    if (!found) {
+      throw new Error(`Catalog "${catalog}" not found. Use 'new:<name>' to create it.`);
+    }
+    catalogId = found.id;
+    catalogName = found.name;
+  }
 
   if (!embeddingContext) {
     throw new Error("Embedding model is not loaded; cannot create embeddings");
@@ -105,19 +137,21 @@ server.registerTool("create_embeddings", {
     source,
     title: sourceName,
     date: new Date().toISOString(),
+    catalog: catalogName,
   };
-  await store.addEmbeddings(chunks, embeddings, metadata);
+  await store.addEmbeddings(chunks, embeddings, metadata, catalogId);
 
-  const total = (await store.getAllEmbeddings()).length;
+  const total = (await store.getAllEmbeddings(catalogId)).length;
   return {
     content: [{
       type: "text" as const,
       text: JSON.stringify(
         {
           stored: embeddings.size,
-          totalInStore: total,
+          totalInCatalog: total,
           storeType: store.isInMemory ? "in-memory" : "pgvector",
           source: sourceName,
+          catalog: catalogName,
         },
         null,
         2,
@@ -127,10 +161,19 @@ server.registerTool("create_embeddings", {
 });
 
 server.registerTool("list_embeddings", {
-  description: "List all stored embedding texts",
-  inputSchema: z.object({}),
-}, async () => {
-  const allEmbeds = await store.getAllEmbeddings();
+  description: "List stored embedding texts, optionally restricted to a single catalog by name",
+  inputSchema: z.object({
+    catalog: z.string().optional().describe("Catalog name to list embeddings from (omit to list all)"),
+  }),
+}, async (args) => {
+  const { catalog } = args;
+  let catalogId: string | null = null;
+  if (catalog) {
+    const found = await store.catalogStore.getCatalog(catalog);
+    if (!found) throw new Error(`Catalog "${catalog}" not found`);
+    catalogId = found.id;
+  }
+  const allEmbeds = await store.getAllEmbeddings(catalogId);
   const text = allEmbeds.length > 0
     ? allEmbeds.map((t, i) => `[${i + 1}] ${t}`).join("\n\n---\n\n")
     : "No embeddings stored";
@@ -139,16 +182,73 @@ server.registerTool("list_embeddings", {
   };
 });
 
+server.registerTool("list_catalogs", {
+  description: "List all embedding catalogs with their embedding counts",
+  inputSchema: z.object({}),
+}, async () => {
+  const catalogs = await store.catalogStore.listCatalogs();
+  const text = catalogs.length > 0
+    ? catalogs
+        .map((c) => {
+          const count = c.embedding_count !== undefined
+            ? c.embedding_count
+            : await store.catalogStore.countEmbeddings(c.id);
+          const desc = c.description ? ` — ${c.description}` : "";
+          return `• ${c.name} [${count} embeddings]${desc}`;
+        })
+        .join("\n")
+    : "No catalogs yet";
+  return {
+    content: [{ type: "text" as const, text }],
+  };
+});
+
+server.registerTool("create_catalog", {
+  description: "Create a new embedding catalog (or return the existing one if the name is already taken)",
+  inputSchema: z.object({
+    name: z.string().describe("Catalog name (unique, case-insensitive)"),
+    description: z.string().optional().describe("Optional description of the catalog"),
+  }),
+}, async (args) => {
+  const catalog = await store.catalogStore.createCatalog(args.name, args.description);
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(catalog, null, 2),
+    }],
+  };
+});
+
+server.registerTool("delete_catalog", {
+  description: "Delete a catalog and all embeddings stored in it (cascading)",
+  inputSchema: z.object({
+    name: z.string().describe("Catalog name to delete"),
+  }),
+}, async (args) => {
+  const found = await store.catalogStore.getCatalog(args.name);
+  if (!found) throw new Error(`Catalog "${args.name}" not found`);
+  await store.catalogStore.deleteCatalog(found.id);
+  return {
+    content: [{ type: "text" as const, text: `✓ Deleted catalog "${found.name}"` }],
+  };
+});
+
 server.registerTool("get_store_status", {
-  description: "Get embedding store type, connection status, and total embedding count",
+  description: "Get embedding store type, connection status, total embedding count, and catalog list",
   inputSchema: z.object({}),
 }, async () => {
   const allEmbeds = await store.getAllEmbeddings();
+  const catalogs = await store.catalogStore.listCatalogs();
   const info = {
     type: store.isInMemory ? "In-Memory" : "PostgreSQL (pgvector)",
     ready: store.isReady,
     embeddingModelLoaded: embeddingContext !== null,
     totalEmbeddings: allEmbeds.length,
+    catalogs: catalogs.map((c) => ({
+      name: c.name,
+      description: c.description,
+      embeddings: c.embedding_count ?? null,
+    })),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }],

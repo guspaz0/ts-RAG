@@ -183,10 +183,11 @@ function createServer(): McpServer {
         source,
         title: sourceName,
         date: new Date().toISOString(),
+        catalog: catalogName,
       };
-      await st.addEmbeddings(chunks, embeddings, metadata);
+      await st.addEmbeddings(chunks, embeddings, metadata, catalogId);
 
-      const total = (await st.getAllEmbeddings()).length;
+      const total = (await st.getAllEmbeddings(catalogId)).length;
       return {
         content: [
           {
@@ -194,9 +195,10 @@ function createServer(): McpServer {
             text: JSON.stringify(
               {
                 stored: embeddings.size,
-                totalInStore: total,
+                totalInCatalog: total,
                 storeType: st.isInMemory ? "in-memory" : "pgvector",
                 source: sourceName,
+                catalog: catalogName,
               },
               null,
               2,
@@ -213,7 +215,8 @@ server.registerTool(
   {
     title: "Query embeddings",
     description:
-      "Search the pgvector database for chunks semantically similar to the query, ranked by cosine similarity.",
+      "Search the pgvector database for chunks semantically similar to the query, ranked by cosine similarity. " +
+      "Optionally restrict the search to a single catalog by name.",
     inputSchema: {
       query: z.string().describe("The natural-language query to search for"),
       limit: z
@@ -223,14 +226,25 @@ server.registerTool(
         .max(100)
         .default(10)
         .describe("Maximum number of results to return"),
+      catalog: z
+        .string()
+        .optional()
+        .describe("Catalog name to restrict the search to (omit to search all catalogs)"),
     },
   },
   async (args) => {
-    const { query, limit } = args;
+    const { query, limit, catalog } = args;
     return enqueue(async () => {
       await ensureInitialized();
       const ctx = embeddingContext!;
       const st = store!;
+
+      let catalogId: string | null = null;
+      if (catalog) {
+        const found = await st.catalogStore.getCatalog(catalog);
+        if (!found) throw new Error(`Catalog "${catalog}" not found`);
+        catalogId = found.id;
+      }
 
       const embedding = await ctx.getEmbeddingFor(query);
       const vector = embedding.vector ? Array.from(embedding.vector) : [];
@@ -238,7 +252,7 @@ server.registerTool(
         throw new Error("Failed to embed the query");
       }
 
-      const results = await st.queryByEmbedding(vector, limit);
+      const results = await st.queryByEmbedding(vector, limit, catalogId);
       if (results.length === 0) {
         return {
           content: [{ type: "text" as const, text: "No results found" }],
@@ -260,13 +274,24 @@ server.registerTool(
   "list_embeddings",
   {
     title: "List embeddings",
-    description: "List all stored embedding texts from the database.",
-    inputSchema: {},
+    description: "List stored embedding texts from the database, optionally restricted to a single catalog by name.",
+    inputSchema: {
+      catalog: z
+        .string()
+        .optional()
+        .describe("Catalog name to list embeddings from (omit to list all)"),
+    },
   },
-  async () => {
+  async (args) => {
     return enqueue(async () => {
       await ensureInitialized();
-      const allEmbeds = await store!.getAllEmbeddings();
+      let catalogId: string | null = null;
+      if (args.catalog) {
+        const found = await store!.catalogStore.getCatalog(args.catalog);
+        if (!found) throw new Error(`Catalog "${args.catalog}" not found`);
+        catalogId = found.id;
+      }
+      const allEmbeds = await store!.getAllEmbeddings(catalogId);
       const text =
         allEmbeds.length > 0
           ? allEmbeds.map((t, i) => `[${i + 1}] ${t}`).join("\n\n---\n\n")
@@ -277,22 +302,96 @@ server.registerTool(
 );
 
 server.registerTool(
+  "list_catalogs",
+  {
+    title: "List catalogs",
+    description: "List all embedding catalogs with their embedding counts.",
+    inputSchema: {},
+  },
+  async () => {
+    return enqueue(async () => {
+      await ensureInitialized();
+      const catalogs = await store!.catalogStore.listCatalogs();
+      const lines: string[] = [];
+      for (const c of catalogs) {
+        const count = c.embedding_count !== undefined
+          ? c.embedding_count
+          : await store!.catalogStore.countEmbeddings(c.id);
+        const desc = c.description ? ` — ${c.description}` : "";
+        lines.push(`• ${c.name} [${count} embeddings]${desc}`);
+      }
+      const text = lines.length > 0 ? lines.join("\n") : "No catalogs yet";
+      return { content: [{ type: "text" as const, text }] };
+    });
+  },
+);
+
+server.registerTool(
+  "create_catalog",
+  {
+    title: "Create catalog",
+    description: "Create a new embedding catalog (or return the existing one if the name is already taken).",
+    inputSchema: {
+      name: z.string().describe("Catalog name (unique, case-insensitive)"),
+      description: z.string().optional().describe("Optional description of the catalog"),
+    },
+  },
+  async (args) => {
+    return enqueue(async () => {
+      await ensureInitialized();
+      const catalog = await store!.catalogStore.createCatalog(args.name, args.description);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(catalog, null, 2) }],
+      };
+    });
+  },
+);
+
+server.registerTool(
+  "delete_catalog",
+  {
+    title: "Delete catalog",
+    description: "Delete a catalog and all embeddings stored in it (cascading).",
+    inputSchema: {
+      name: z.string().describe("Catalog name to delete"),
+    },
+  },
+  async (args) => {
+    return enqueue(async () => {
+      await ensureInitialized();
+      const found = await store!.catalogStore.getCatalog(args.name);
+      if (!found) throw new Error(`Catalog "${args.name}" not found`);
+      await store!.catalogStore.deleteCatalog(found.id);
+      return {
+        content: [{ type: "text" as const, text: `✓ Deleted catalog "${found.name}"` }],
+      };
+    });
+  },
+);
+
+server.registerTool(
   "get_store_status",
   {
     title: "Store status",
     description:
-      "Get the embedding store type, readiness, model status, and total embedding count.",
+      "Get the embedding store type, readiness, model status, total embedding count, and catalog list.",
     inputSchema: {},
   },
   async () => {
     return enqueue(async () => {
       await ensureInitialized();
       const allEmbeds = await store!.getAllEmbeddings();
+      const catalogs = await store!.catalogStore.listCatalogs();
       const info = {
         type: store!.isInMemory ? "In-Memory" : "PostgreSQL (pgvector)",
         ready: store!.isReady,
         embeddingModelLoaded: embeddingContext !== null,
         totalEmbeddings: allEmbeds.length,
+        catalogs: catalogs.map((c) => ({
+          name: c.name,
+          description: c.description,
+          embeddings: c.embedding_count ?? null,
+        })),
       };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }],

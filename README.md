@@ -22,6 +22,71 @@ Documento (PDF/MD)
        └─ 4. LlamaCompletion.generateCompletion() → respuesta con contexto
 ```
 
+## Servidor MCP
+
+El sistema expone sus capacidades como un **servidor MCP** (Model Context Protocol) para integrarlo con clientes como Claude Desktop, OpenCode o cualquier cliente MCP compatible. Se ofrecen dos modos de transporte:
+
+### 1. stdio (local)
+
+`src/mcp-server.ts` — transporte stdio para clientes locales que lanzan el proceso directamente:
+
+```bash
+npm run mcp-server
+```
+
+Configuración de ejemplo (Claude Desktop / OpenCode):
+
+```json
+{
+  "mcpServers": {
+    "rag-embeddings": {
+      "command": "npm",
+      "args": ["run", "mcp-server"],
+      "cwd": "/ruta/a/ts-RAG"
+    }
+  }
+}
+```
+
+### 2. Streamable HTTP (red)
+
+`src/mcp-http-server.ts` — transporte HTTP con sesiones SSE, pensado para clientes remotos o en navegador:
+
+```bash
+npm run mcp-http
+# → http://127.0.0.1:3000/mcp
+```
+
+Variables de entorno adicionales:
+
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `MCP_HOST` | `127.0.0.1` | Interfaz de escucha |
+| `MCP_PORT` | `3000` | Puerto HTTP |
+| `MCP_ENDPOINT` | `/mcp` | Ruta del endpoint MCP |
+| `MCP_API_KEY` | *(vacío)* | Si se define, exige `Authorization: Bearer <key>` (comparación en tiempo constante) |
+| `MCP_CORS_ORIGIN` | `*` | Origen CORS permitido para clientes en navegador |
+
+Características del servidor HTTP:
+
+- **Inicialización perezosa**: el modelo de embeddings y el store se cargan en la primera petición, no al arrancar
+- **Serialización de operaciones**: las llamadas a herramientas se encolan para evitar uso concurrente del modelo
+- **Sesiones por cliente**: cada cliente obtiene su propio `Mcp-Session-Id` y su instancia de servidor
+- **Apagado graceful**: cierra todas las sesiones activas al recibir SIGINT/SIGTERM
+
+### Herramientas expuestas
+
+Ambos servidores registran el mismo conjunto de herramientas:
+
+| Herramienta | Descripción |
+|-------------|-------------|
+| `create_embeddings` | Crea embeddings desde un PDF (`pdf_path`) o texto plano (`text`) y los almacena en la base de datos |
+| `query_embeddings` | Busca fragmentos semánticamente similares a una consulta, ordenados por similitud coseno |
+| `list_embeddings` | Lista todos los textos almacenados en el store |
+| `get_store_status` | Estado del store (tipo, listo, modelo cargado, total de embeddings) |
+
+En el servidor stdio, si el modelo de embeddings no se puede cargar, `search_embeddings` degrada a coincidencia por texto.
+
 ## Componentes principales
 
 | Archivo | Función |
@@ -41,6 +106,8 @@ Documento (PDF/MD)
 | `src/store/pgVectorStore.ts` | Implementación PostgreSQL + pgvector: pool de conexiones, tabla `embeddings` con columna `vector(768)`, índice IVFFLAT, upsert, búsqueda por similitud coseno |
 | `src/store/pgDaemon.ts` | Servidor PostgreSQL embebido: inicia `initdb` y `postgres` como proceso hijo |
 | `src/store/inMemoryStore.ts` | Fallback en memoria con `Map<string, number[]>` |
+| `src/mcp-server.ts` | Servidor MCP sobre stdio: expone las herramientas de embeddings a clientes locales |
+| `src/mcp-http-server.ts` | Servidor MCP sobre Streamable HTTP: sesiones por cliente, auth Bearer opcional, CORS e inicialización perezosa |
 
 ## Almacenamiento
 
@@ -118,6 +185,8 @@ npm start
 | `npm start` | Ejecuta con `vite-node` y optimizaciones Metal GPU |
 | `npm run dev` | Modo desarrollo con `ts-node` |
 | `npm run build` | Compilación TypeScript a JavaScript |
+| `npm run mcp-server` | Arranca el servidor MCP sobre stdio |
+| `npm run mcp-http` | Arranca el servidor MCP sobre Streamable HTTP |
 | `npm test` | Placeholder (sin tests implementados) |
 
 ## Estrategia de tolerancia a fallos
